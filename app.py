@@ -14,6 +14,7 @@ import time
 import cv2
 from flask import Flask, Response, redirect, render_template
 
+import health_log
 import scan_config
 from adc.routes import create_adc_blueprint
 from scan_routes import create_scan_blueprint
@@ -189,6 +190,7 @@ def analysis_page():
 
 
 if __name__ == "__main__":
+    health_log.start()
     try:
         camera.start(exposure=scan_config.load()["exposure"])
     except Exception as e:

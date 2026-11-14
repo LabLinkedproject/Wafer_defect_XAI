@@ -444,6 +444,7 @@ class ScanService:
             manifest["stopped"] = self._stop
             with open(os.path.join(out, "manifest.json"), "w") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
+            os.sync()                     # 촬영본을 디스크에 확정한다 (commit=600 루트에서 0 바이트 사진이 생겼다, 2026-11-14)
             if self._stop:
                 return
             self.job["message"] = "웨이퍼 중심으로 복귀"

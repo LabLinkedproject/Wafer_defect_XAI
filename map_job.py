@@ -11,6 +11,11 @@ map_job.py
 import os
 import sys
 
+# 큰 코어 4개·스레드 4개로 제한한다. 8코어 전부를 쓰면 보드가 재부팅된 적이 있다(2026-11-03 학습, 11-14 합성 전후)
+CORES = {4, 5, 6, 7}
+for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_k, "4")
+
 
 def say(kind: str, msg: str = ""):
     print(f"{kind} {msg}", flush=True)
@@ -19,6 +24,12 @@ def say(kind: str, msg: str = ""):
 def main() -> int:
     scan_dir = sys.argv[1]
     try:
+        os.sched_setaffinity(0, CORES & os.sched_getaffinity(0) or os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        pass
+    try:
+        import cv2
+        cv2.setNumThreads(4)
         import wafer_stitch
         from adc import scan_input
         say("phase", "stitch")
@@ -35,6 +46,8 @@ def main() -> int:
     except Exception as e:
         say("error", f"{type(e).__name__}: {e}")
         return 1
+    finally:
+        os.sync()                     # 루트가 commit=600 이라 갑자기 꺼지면 결과 파일이 깨진다(2026-11-14)
     return 0
 
 
