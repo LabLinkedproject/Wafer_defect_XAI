@@ -11,10 +11,13 @@ map_job.py
 import os
 import sys
 
-# 큰 코어 4개·스레드 4개로 제한한다. 8코어 전부를 쓰면 보드가 재부팅된 적이 있다(2026-11-03 학습, 11-14 합성 전후)
-CORES = {4, 5, 6, 7}
+# 작은 코어(A55) 4개로 제한한다. 큰 코어(A76)로 계산을 시작하는 순간마다 보드가 멈췄다
+# (2026-11-14 16:28·16:39·17:03, 큰 코어 4개로 줄여도 같음, 온도·메모리는 정상 → 순간 전력 부족 의심).
+# 작은 코어는 전력이 훨씬 적다. 합성이 2~3배 느려지는 대신 멈추지 않게 한다
+CORES = {0, 1, 2, 3}
+THREADS = 4
 for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
-    os.environ.setdefault(_k, "4")
+    os.environ.setdefault(_k, str(THREADS))
 
 
 def say(kind: str, msg: str = ""):
@@ -29,7 +32,7 @@ def main() -> int:
         pass
     try:
         import cv2
-        cv2.setNumThreads(4)
+        cv2.setNumThreads(THREADS)
         import wafer_stitch
         from adc import scan_input
         say("phase", "stitch")
