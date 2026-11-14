@@ -35,6 +35,9 @@ GLARE_RATIO = 1.35         # 주변(넓은 중앙값) 대비 이 배율보다 �
 DIM_RATIO = 0.35           # 보통 밝기의 이 비율보다 어두운 곳(감광된 가장자리)은 합성에 쓰지 않는다
 DIM_FLOOR = 8.0
 GLARE_MARGIN = 0.06        # 반사 둘레 번짐까지 빼는 폭 (영상 높이 대비)
+LENS_REACH = 0.35          # 카메라 자신의 반사를 찾는 범위: 사진 가운데에서 영상 높이의 이 비율 안
+LENS_MARGIN_MM = 1.0       # 카메라 반사 무늬를 넓혀 가리는 폭 (mm)
+HALO_RATIO = 1.35          # 사진 가운데 밝기의 이 배율보다 밝은 곳(조명 반사 고리의 번짐)은 합성에 쓰지 않는다
 WAFER_DIAMETER_MM = WAFER_MODEL["diameter_mm"]
 
 
@@ -59,6 +62,33 @@ def glare_mask(light: np.ndarray, saturated: np.ndarray | None = None) -> np.nda
         return m.astype(bool)
     r = max(3, int(light.shape[0] * GLARE_MARGIN))
     return cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
+
+
+def lens_mask(raw: np.ndarray, glare: np.ndarray, px_per_mm: float | None = None) -> np.ndarray:
+    """카메라 자신의 반사 (사진 좌표). raw 는 보정 전 사진들의 픽셀별 중앙값이다.
+    투명·거울면을 바로 위에서 찍으면 렌즈와 카메라 기판이 광축 자리(사진 가운데)에 비친다(2026-11-14 근접 촬영).
+    사진마다 장면은 움직이므로 중앙값에 남은 무늬는 카메라에 붙은 것이다. 다이 간격으로 찍으면 격자선도 남으므로
+    긴 직선은 빼고, 가운데 가까이에 남은 무늬(렌즈 원은 안까지 채움)만 조금 넓혀 가린다."""
+    h, w = raw.shape
+    hp = np.abs(raw - cv2.GaussianBlur(raw, (0, 0), 4))
+    L = max(15, int(h * 0.25))
+    lines = np.maximum(cv2.morphologyEx(hp, cv2.MORPH_OPEN, np.ones((1, L), np.uint8)),
+                       cv2.morphologyEx(hp, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8)))
+    rest = np.where(cv2.dilate(lines, np.ones((7, 7), np.uint8)) > 2, 0, hp)
+    rest[glare] = 0
+    if not (~glare).any():
+        return np.zeros_like(glare)
+    thr = float(np.percentile(rest[~glare], 97))
+    b = (cv2.GaussianBlur(rest, (0, 0), 3) > thr * 0.6).astype(np.uint8)
+    n, lab, st, cen = cv2.connectedComponentsWithStats(b)
+    out = np.zeros((h, w), np.uint8)
+    near = [i for i in range(1, n) if st[i, 4] >= 50 and np.hypot(cen[i][0] - w / 2, cen[i][1] - h / 2) < h * LENS_REACH]
+    # 무늬 자체만 가린다. 한 덩어리로 묶어 채우면 다이 가운데 15 mm 가 통째로 빠져 결함 자리까지 가린다(2026-11-14).
+    # 무늬는 모든 다이의 같은 자리에 있어 기준 다이 비교에서도 상쇄된다
+    for i in near:
+        out[lab == i] = 1
+    r = max(3, int(round((px_per_mm or h / 40) * LENS_MARGIN_MM)))
+    return cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
 
 
 def light_level(light: np.ndarray, glare: np.ndarray | None = None) -> float:
@@ -512,6 +542,18 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     light = _flatfield(np.stack(small), 10)
     saturated = np.mean([x >= GLARE_LEVEL for x in small], 0) >= 0.5
     glare = glare_mask(light, saturated)
+    # 조명 반사 고리는 포화된 곳 바깥으로 서서히 밝아지며 번진다. 그 구간의 하얀 번짐이 다이 모서리 오검출이 됐다(2026-11-14)
+    hh, ww = light.shape
+    yy_, xx_ = np.mgrid[0:hh, 0:ww]
+    centre = np.hypot(xx_ - ww / 2, yy_ - hh / 2) < hh * 0.25
+    halo = (light > float(np.median(light[centre & ~glare])) * HALO_RATIO) if (centre & ~glare).any() else np.zeros_like(glare)
+    halo &= ~glare
+    if halo.mean() < 0.01:
+        halo[:] = False
+    lens = lens_mask(np.median(np.stack(small), 0), glare, scale_hint * WORK_SCALE if scale_hint else None)
+    if lens.any():
+        log(f"카메라 자신의 반사(사진 가운데) {lens.mean() * 100:.1f}% 를 가림")
+        glare = glare | lens
     floor = max(light_top(light, glare) * 0.05, 6)
     flat = [s / np.maximum(light, floor) for s in small]
 
@@ -592,7 +634,11 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
         lc = light
     white = np.maximum(lc, floor)
     imgs = [x / white[..., None] for x in imgs]
-    glare_c = glare if lc.shape == light.shape else cv2.resize(glare.astype(np.uint8), (lc.shape[1], lc.shape[0])) > 0
+    # 번짐 구간은 격자·웨이퍼 측정에는 쓰고(다이 경계선이 그 자리에 있다) 결함 검출에 쓰는 최종 맵에서만 뺀다
+    final = glare | halo
+    if halo.any():
+        log(f"조명 반사 고리 번짐 {float(halo.mean()) * 100:.1f}% 는 최종 맵에서 뺌")
+    glare_c = final if lc.shape == light.shape else cv2.resize(final.astype(np.uint8), (lc.shape[1], lc.shape[0])) > 0
     rgb, den = _compose(imgs, lc, cpos, Ac, S, SZ, kc, gains, color=True, glare=glare_c)
     mask = den > 0.02
     # 조명 색 보정: 채널별 밝기를 맞춰 LED 색이 웨이퍼 색으로 보이지 않게 한다
@@ -624,6 +670,7 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     result = {
         "images": len(dies), "map": name, "mask": MASK_NAME, "size_px": [SZ[1], SZ[0]],
         "glare_pct": round(float(glare.mean() * 100), 1),
+        "lens_pct": round(float(lens.mean() * 100), 2),
         "camera": {"px_per_mm_full": round(scale_mm / WORK_SCALE, 3), "rotation_deg": round(cam["theta_deg"], 2),
                    "mirrored": cam["mirrored"], "fov_mm": [round(bgr[0].shape[1] / (scale_mm / WORK_SCALE), 1),
                                                           round(bgr[0].shape[0] / (scale_mm / WORK_SCALE), 1)]},

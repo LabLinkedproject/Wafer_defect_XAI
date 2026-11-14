@@ -22,7 +22,8 @@ import wafer_raster as R
 from wafer_model import WAFER_MODEL, die_layout
 
 SCRIBE_MARGIN = 12            # 스크라이브 라인은 정렬 오차에 민감해 다이 가장자리는 비교에서 뺀다
-MIN_DIE_COVERAGE = 0.92       # 이보다 적게 찍힌 다이는 검사하지 않는다
+MIN_DIE_COVERAGE = 0.85       # 다이들의 보통 촬영 비율 대비 이보다 적게 찍힌 다이는 검사하지 않는다 (가장자리 다이는 이웃 사진이 덮는 몫이 없어 0.87 배 안팎)
+MIN_DIE_COVERAGE_ABS = 0.5    # 그래도 다이 면적의 절반도 안 찍힌 다이는 뺀다
 MAX_SHIFT = 8                 # 미세 정렬 허용 폭 (px)
 SHARP_Z = 7.0                 # 선명한 결함 판정선
 STAIN_Z = 7.0                 # 번짐 결함 판정선
@@ -84,13 +85,21 @@ def rectify(gray: np.ndarray, meta: dict, seen: np.ndarray | None = None) -> tup
 
 
 def crop_dies(img, valid, P, dies):
-    """검사할 수 있는 다이만 잘라낸다."""
+    """검사할 수 있는 다이만 잘라낸다.
+    근접 촬영(2026-11-14)은 모든 다이의 가운데(카메라 반사)와 네 모서리(조명 반사 고리)가 똑같이 비어
+    다이 면적 기준 92 % 를 넘는 다이가 없다. 그래서 다이들의 보통 촬영 비율을 기준으로 덜 찍힌 다이만 뺀다."""
     out = {}
+    cover = {}
+    for d in dies:
+        r, c = R.die_slot(d)
+        cover[d["id"]] = float(valid[r * P:(r + 1) * P, c * P:(c + 1) * P].mean())
+    seen = [v for v in cover.values() if v >= MIN_DIE_COVERAGE_ABS]
+    need = max(MIN_DIE_COVERAGE_ABS, MIN_DIE_COVERAGE * float(np.median(seen))) if seen else 1.0
     for d in dies:
         r, c = R.die_slot(d)
         y, x = r * P, c * P
         v = valid[y:y + P, x:x + P]
-        if v.mean() >= MIN_DIE_COVERAGE:
+        if cover[d["id"]] >= need:
             out[d["id"]] = {"die": d, "y": y, "x": x, "img": img[y:y + P, x:x + P].copy(), "valid": v.copy()}
     return out
 
@@ -174,7 +183,9 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
         n, lab = cv2.connectedComponents(weak, connectivity=8)
         seeds = np.unique(lab[(z > thr) & c["mask"] & (weak > 0)])
         sharp = np.isin(lab, seeds[seeds > 0])
-        soft = (np.abs(c["soft"]) > max(STAIN_Z * noise["soft_sigma"], MIN_STAIN_CONTRAST)) & c["mask"]
+        # 번짐도 같은 규칙: 투명면의 하얀 번짐(표면 얼룩·조명 고리 번짐)은 결함이 아니다 (2026-11-14 근접 촬영 오검출 4건)
+        soft_z = np.clip(-c["soft"], 0, None) if dark_only else np.abs(c["soft"])
+        soft = (soft_z > max(STAIN_Z * noise["soft_sigma"], MIN_STAIN_CONTRAST)) & c["mask"]
         stain_min = int(MIN_STAIN_RATIO * P * P)
         c["pixels"] = np.zeros((P, P), bool)
         # 번짐 지도는 흐림을 거치므로 선명한 결함 둘레에도 반응한다. 그 둘레는 번짐 결함에서 뺀다
