@@ -466,6 +466,8 @@ class ScanService:
             cmd.append("--flip-y")
         if cfg.get("camera_scale_hint"):
             cmd.append(f"--scale-hint={float(cfg['camera_scale_hint']):.4f}")
+        if cfg.get("camera_turn_hint") is not None:
+            cmd.append(f"--turn-hint={float(cfg['camera_turn_hint']):.2f}")
         self._phase("stitch")
         proc = subprocess.Popen(cmd, cwd=BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         error, tail = None, []

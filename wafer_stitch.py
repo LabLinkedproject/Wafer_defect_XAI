@@ -78,7 +78,8 @@ def _edges(img: np.ndarray, win: np.ndarray) -> np.ndarray:
     return np.hypot(cv2.Sobel(a, cv2.CV_32F, 1, 0), cv2.Sobel(a, cv2.CV_32F, 0, 1)) * win
 
 
-def estimate_camera(flat: list[np.ndarray], pos: np.ndarray, grid: list[tuple], prior: np.ndarray | None = None) -> dict:
+def estimate_camera(flat: list[np.ndarray], pos: np.ndarray, grid: list[tuple], prior: np.ndarray | None = None,
+                    glare: np.ndarray | None = None) -> dict:
     """이웃 사진 쌍의 영상 이동으로 mm→px 행렬을 구한다.
     다이 격자가 반복되므로 한 칸 어긋난 쌍이 섞인다. 큰 이동을 일관되게 내는 쌍만 쓴다.
     prior(이전 스캔의 행렬)를 주면 예상 이동만큼 먼저 옮긴 뒤 남은 차이만 잰다.
@@ -86,8 +87,14 @@ def estimate_camera(flat: list[np.ndarray], pos: np.ndarray, grid: list[tuple], 
     h, w = flat[0].shape
     yy, xx = np.mgrid[0:h, 0:w]
     win = cv2.GaussianBlur((np.hypot(xx - w / 2, yy - h / 2) < h * 0.46).astype(np.float32), (0, 0), 15)
+    if glare is not None and glare.any():
+        win = win * cv2.GaussianBlur((~glare).astype(np.float32), (0, 0), 5)
     hann = cv2.createHanningWindow((w, h), cv2.CV_64F)
-    edges = [_edges(f, win).astype(np.float64) for f in flat]
+    edges = np.stack([_edges(f, win) for f in flat])
+    # 카메라에 붙어 따라다니는 무늬(투명 아크릴에 비친 조명 고리·카메라)는 모든 사진의 같은 자리에 있다.
+    # 그대로 두면 정합이 '이동 0' 으로 끌려가므로(2026-11-14 근접 촬영), 사진들의 윤곽 중앙값을 빼고 움직이는 윤곽만 쓴다
+    fixed = np.median(edges, 0)
+    edges = [np.maximum(e - fixed, 0).astype(np.float64) for e in edges]
     samples = []
     for i, j in grid:
         d = pos[j] - pos[i]
@@ -100,6 +107,7 @@ def estimate_camera(flat: list[np.ndarray], pos: np.ndarray, grid: list[tuple], 
             sx, sy = ex + rx, ey + ry
         samples.append((d[0], d[1], sx, sy, resp))
     s = np.array(samples)
+    s = s[np.isfinite(s).all(1)]             # 반사를 빼고 나면 무늬가 없는 쌍은 정합 값이 NaN 이다
     if len(s) < 4:
         raise ValueError("이웃 사진 쌍이 부족합니다")
 
@@ -123,7 +131,8 @@ def estimate_camera(flat: list[np.ndarray], pos: np.ndarray, grid: list[tuple], 
     sign = 1.0 if ax[0] * ay[1] - ax[1] * ay[0] > 0 else -1.0
     A = scale * np.array([[math.cos(theta), -sign * math.sin(theta)],
                           [math.sin(theta), sign * math.cos(theta)]])
-    return {"A": A, "scale": float(scale), "theta_deg": math.degrees(theta), "mirrored": sign < 0}
+    return {"A": A, "scale": float(scale), "theta_deg": math.degrees(theta), "mirrored": sign < 0,
+            "response": float(np.median(s[:, 4]))}
 
 
 def _camera_matrix(scale: float, theta_deg: float, mirrored: bool) -> np.ndarray:
@@ -131,11 +140,13 @@ def _camera_matrix(scale: float, theta_deg: float, mirrored: bool) -> np.ndarray
     return scale * np.array([[math.cos(t), -sign * math.sin(t)], [math.sin(t), sign * math.cos(t)]])
 
 
-def camera_prior(scan_root: str, exclude: str, recent: int = 5, scale_hint: float | None = None) -> np.ndarray | None:
+def camera_prior(scan_root: str, exclude: str, recent: int = 5, scale_hint: float | None = None,
+                 turn_hint: float | None = None) -> np.ndarray | None:
     """최근 합성에 성공한 다른 스캔들의 카메라 행렬 (축소 영상 기준). 카메라 장착이 같다고 본다.
     한 번 잘못 잰 맵이 다음 기준을 오염시키지 않도록 최근 몇 개의 중앙값을 쓴다.
     scale_hint: 카메라 높이를 바꾼 뒤 촬영 환경 점검이 잰 새 축척(px/갠트리 mm). 있으면 축척은 이것을 쓰고
-    회전·좌우는 그대로 이전 값을 쓴다 (높이만 바뀌었다고 본다)."""
+    회전·좌우는 그대로 이전 값을 쓴다 (높이만 바뀌었다고 본다).
+    turn_hint: 카메라를 다시 달아 방향이 바뀌었을 때 직접 잰 회전(°). 이전 스캔이 없어도 축척과 함께 주면 기준이 된다."""
     scales, turns, mirrored = [], [], []
     for d in sorted(glob.glob(os.path.join(scan_root, "*_scan")), reverse=True):
         meta = os.path.join(d, "wafer_map.json")
@@ -149,10 +160,12 @@ def camera_prior(scan_root: str, exclude: str, recent: int = 5, scale_hint: floa
             mirrored.append(cam["mirrored"])
         if len(scales) >= recent:
             break
-    if not scales:
+    if not scales and not (scale_hint and turn_hint is not None):
         return None
     scale = float(scale_hint) if scale_hint else float(np.median(scales))
-    return _camera_matrix(scale * WORK_SCALE, float(np.median(turns)), sum(mirrored) * 2 > len(mirrored))
+    turn = float(turn_hint) if turn_hint is not None else float(np.median(turns))
+    mirror = (sum(mirrored) * 2 > len(mirrored)) if mirrored else False
+    return _camera_matrix(scale * WORK_SCALE, turn, mirror)
 
 
 def _agrees(cam: dict, prior: np.ndarray) -> bool:
@@ -469,7 +482,7 @@ def measure_grid(mos: np.ndarray, den: np.ndarray, wafer: dict | None, s: float 
 
 
 def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log=print, flip_y: bool | None = None,
-          scale_hint: float | None = None) -> dict:
+          scale_hint: float | None = None, turn_hint: float | None = None) -> dict:
     """스캔 폴더(manifest.json + 사진)로 웨이퍼 맵을 만든다.
     flip_y: 갠트리 +Y 가 웨이퍼 6시(노치) 쪽이면 참. 맵을 위아래로 뒤집어 노치가 아래, 다이 1 이 위에 오게 한다.
     없으면 스캔 당시 설정(wafer_sign_y)을 따른다."""
@@ -477,7 +490,11 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     out_dir = out_dir or scan_dir
     with open(os.path.join(scan_dir, "manifest.json")) as f:
         man = json.load(f)
-    dies = man["dies"]
+    root = os.path.dirname(scan_dir.rstrip("/"))
+    dies = [d for d in man["dies"] if os.path.getsize(os.path.join(root, d["file"])) > 0] \
+        if all(os.path.exists(os.path.join(root, d["file"])) for d in man["dies"]) else man["dies"]
+    if len(dies) < len(man["dies"]):
+        log(f"비어 있는 사진 {len(man['dies']) - len(dies)}장은 빼고 합성")
     if len(dies) < MIN_IMAGES:
         raise ValueError(f"사진이 {len(dies)}장뿐입니다. 합성에는 최소 {MIN_IMAGES}장이 필요합니다.")
     root = os.path.dirname(scan_dir.rstrip("/"))
@@ -501,16 +518,23 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     log("카메라 축척·방향 측정")
     pairs = [(i, rc[(r + dr, c + dc)]) for (r, c), i in rc.items() for dr, dc in ((0, 1), (1, 0))
              if (r + dr, c + dc) in rc]
-    prior = camera_prior(root, scan_dir, scale_hint=scale_hint)
+    prior = camera_prior(root, scan_dir, scale_hint=scale_hint, turn_hint=turn_hint)
     try:
-        cam = estimate_camera(flat, pos, pairs)
+        cam = estimate_camera(flat, pos, pairs, glare=glare)
     except ValueError:
         if prior is None:
             raise
         cam = {"A": np.full((2, 2), np.nan)}
     if prior is not None and not _agrees(cam, prior):
         log("격자 반복으로 이동량이 모호해 이전 카메라 값을 기준으로 다시 측정")
-        cam = estimate_camera(flat, pos, pairs, prior)
+        cam = estimate_camera(flat, pos, pairs, prior, glare=glare)
+        if not _agrees(cam, prior):
+            # 근접 촬영에서는 이웃 사진의 겹침이 반사 속에 들어가 사진만으로는 이동량을 잴 수 없다(2026-11-14).
+            # 갠트리 위치는 격자로 0.2 mm/32 mm 안에서 맞는 것을 확인했으므로, 기준 카메라 값과 갠트리 위치로 합성한다
+            log("사진 겹침으로 이동량을 잴 수 없어 기준 카메라 값(축척·방향)과 갠트리 위치로 합성")
+            sc = float(np.linalg.norm(prior[:, 0]))
+            cam = {"A": prior, "scale": sc, "theta_deg": math.degrees(math.atan2(prior[1, 0], prior[0, 0])),
+                   "mirrored": bool(prior[0, 0] * prior[1, 1] - prior[0, 1] * prior[1, 0] < 0), "assumed": True}
     if not np.isfinite(cam["A"]).all():
         raise ValueError("사진 사이 이동량을 측정하지 못했습니다. 사진이 실제로 다른 위치에서 찍혔는지 확인하세요.")
     A = cam["A"]
@@ -541,6 +565,15 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
 
     log("웨이퍼·격자 측정")
     wafer = detect_wafer(mos_g, den_g, s)
+    cfg_ = man.get("config") or {}
+    if (wafer is None or wafer["arc_deg"] < 45) and "wafer_center_x" in cfg_:
+        # 근접 촬영은 시야가 좁아 웨이퍼 가장자리가 끝 사진에 조금씩만 보인다(2026-11-14).
+        # 갠트리 위치가 정확하므로 설정된 웨이퍼 중심과 지름으로 원을 정한다
+        cg = (pos.max(0) + pos.min(0)) / 2
+        wx, wy = float(cfg_["wafer_center_x"]), float(cfg_["wafer_center_y"])
+        wafer = {"cx": size[1] / 2 + (wx - cg[0]) * s, "cy": size[0] / 2 - (wy - cg[1]) * s,
+                 "r": WAFER_DIAMETER_MM / 2 * s, "residual_px": None, "points": 0, "arc_deg": 360, "from_gantry": True}
+        log("웨이퍼 가장자리가 짧게만 보여 설정된 웨이퍼 중심과 지름으로 원을 정함")
     grid = measure_grid(mos_g, den_g, wafer if wafer and wafer["arc_deg"] >= 45 else None)
 
     # 컬러 출력 (out_scale=1 이면 원본의 절반 해상도 기준)
@@ -615,7 +648,8 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
                            "radius_px": round(wafer["r"] * out_scale, 1), "radius_gantry_mm": round(r_mm, 2),
                            "center_gantry_mm": [round(cgx, 2), round(cgy, 2)],
                            "fit_residual_px": wafer["residual_px"], "arc_deg": wafer["arc_deg"],
-                           "gantry_mm_per_true_mm": round(r_mm / (WAFER_DIAMETER_MM / 2), 4)}
+                           "gantry_mm_per_true_mm": round(r_mm / (WAFER_DIAMETER_MM / 2), 4),
+                           "from_gantry": bool(wafer.get("from_gantry"))}
     if grid:
         ratio = (WAFER_DIAMETER_MM / 2) / wafer["r"] if wafer else None
         result["grid"] = {"angle_deg": grid["angle_deg"], "pitch_px": round(grid["pitch_px"] * out_scale, 1),
