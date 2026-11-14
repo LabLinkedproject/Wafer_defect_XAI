@@ -450,8 +450,12 @@ class ScanService:
             self.job["message"] = "웨이퍼 중심으로 복귀"
             self._move(g, st, prof, float(cfg["wafer_center_x"]), float(cfg["wafer_center_y"]))
             scan_s = time.monotonic() - t0
-            self._make_map(out, len(self.scan["results"]))
             self.job["result"] = os.path.basename(out.rstrip("/"))
+            if not cfg.get("auto_map", True):
+                # 전원이 약하면 촬영과 무거운 합성을 겹치지 않게 나눈다 (2026-11-14 노트북 USB 전원)
+                self.job["message"] = f"촬영 완료: {len(self.scan['results'])}/{len(order)}장, {scan_s:.0f}초. 맵 합성은 따로 실행하세요"
+                return
+            self._make_map(out, len(self.scan["results"]))
             self.job["message"] = f"스캔 완료: {len(self.scan['results'])}/{len(order)}장, {scan_s:.0f}초. 웨이퍼 맵 합성·결함 검출 완료"
         self._run("scan", fn, total=len(order))
 
@@ -461,7 +465,9 @@ class ScanService:
         if n < wafer_stitch.MIN_IMAGES:
             raise JobError(f"합성에 필요한 사진이 부족합니다 ({n}장)")
         # 맵 방향은 하드웨어(갠트리 축과 웨이퍼의 관계)로 정해지므로 지금 설정을 따른다 (예전 스캔을 다시 합성할 때도)
-        cmd = [sys.executable, os.path.join(BASE_DIR, "map_job.py"), os.path.abspath(scan_dir)]
+        # 가장 낮은 CPU·디스크 우선순위로 돌린다. 보드 전원이 약해 순간 부하가 몰리면 멈춘다(2026-11-14)
+        cmd = ["nice", "-n", "19", "ionice", "-c", "3",
+               sys.executable, os.path.join(BASE_DIR, "map_job.py"), os.path.abspath(scan_dir)]
         cfg = scan_config.load()
         if int(cfg["wafer_sign_y"]) < 0:
             cmd.append("--flip-y")

@@ -37,6 +37,9 @@ DEFAULTS = {
     "camera_scale_hint": None,
     # 카메라를 다시 달아 방향이 바뀌었을 때 잰 회전(°, 갠트리 mm → 사진 이동). 2026-11-14 근접 장착은 −90
     "camera_turn_hint": None,
+    # 촬영이 끝나면 맵 합성·결함 검출을 바로 이어서 돌린다. 보드 전원이 약할 때(노트북 USB, 2026-11-14)는 끄고
+    # 촬영과 합성을 나눠 돌린다 (웹 '맵 다시 합성' 또는 POST /api/scan/map)
+    "auto_map": True,
     # 투명 앞면 검출을 색 차이(R−B)로 한다. 기본은 흑백에서 어두운 것만 (wafer_detect.detection_channel 참고)
     "detect_chroma": False,
     "jpeg_quality": 92,
