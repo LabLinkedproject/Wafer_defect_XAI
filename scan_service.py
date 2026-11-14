@@ -46,6 +46,7 @@ AE_TOLERANCE = 12
 AE_STEPS = 4
 AE_SETTLE_S = 0.8      # 노출을 바꾼 뒤 센서가 따라오는 시간
 AE_MIN, AE_MAX = 5, 300
+EDGE_CLAMP_MM = 16.0   # 허용 범위를 이만큼(다이 반 칸)까지 벗어난 다이는 범위 끝에서 찍는다. 실제 촬영 위치는 manifest pos 에 남는다
 LIGHT_CAP_EXPOSURE = 150   # 이 카메라는 노출 약 150 이상에서 밝기가 거의 늘지 않는다 (조명 점검 기준)
 
 
@@ -154,9 +155,16 @@ class ScanService:
         if cfg.get("map_radius_mm"):
             order = self._coverage_order(cx, cy, float(cfg["map_radius_mm"]), float(cfg["map_step_mm"]))
         sx, sy = int(cfg["wafer_sign_x"]), int(cfg["wafer_sign_y"])
+        (xl, xh), (yl, yh) = gcli.limits("x"), gcli.limits("y")
         for d in order:
             d["gx"] = d.get("gx", round(cx + sx * d["x_mm"], 2))
             d["gy"] = d.get("gy", round(cy + sy * d["y_mm"], 2))
+            # 가동 범위가 좁아(2026-11-13 Y 240 mm) 가장자리 다이 중심에 못 닿으면, 조금 모자란 만큼은 범위 끝에서 찍는다
+            x, y = min(max(d["gx"], xl), xh), min(max(d["gy"], yl), yh)
+            short = max(abs(x - d["gx"]), abs(y - d["gy"]))
+            if 0 < short <= EDGE_CLAMP_MM:
+                d["clamped_mm"] = round(short, 2)
+                d["gx"], d["gy"] = round(x, 2), round(y, 2)
             d["in_limits"] = self._in_limits(d["gx"], d["gy"])
         p = spec["pitch_mm"]
         ext = max(max(abs(d["x_mm"]), abs(d["y_mm"])) for d in dies) + p / 2   # 다이 바깥 경계
@@ -169,6 +177,7 @@ class ScanService:
                          "in_limits": self._in_limits(cx + x, cy + y)}
                         for n, (x, y) in zip(("좌상", "우상", "우하", "좌하"), corners)],
             "all_in_limits": all(d["in_limits"] for d in order),
+            "clamped": [{"id": d["id"], "short_mm": d["clamped_mm"]} for d in order if "clamped_mm" in d],
         }
 
     # ── 작업 실행 ──────────────────────────────────────────────────
