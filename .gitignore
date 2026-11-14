@@ -56,3 +56,6 @@ models/*.log
 models/progress_*.json
 models/job_progress.json
 models/heartbeat.log
+
+# 웹 서버 상태 기록·손상 파일 보관 (health_log.py)
+logs/
