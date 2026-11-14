@@ -41,6 +41,8 @@ GROW_RATIO = 0.6              # 이중 문턱의 낮은 쪽 (높은 문턱 대�
 DARK_BACKGROUND = 120          # 격자선 밝기 정보가 없는 예전 맵: 웨이퍼 안쪽 중앙값이 이보다 어두우면 투명 앞면
 CHROMA_GAIN = 3.0             # R−B 차이를 밝기 영상 범위로 늘리는 배율
 DARK_ONLY_Z = 6.0             # 어두운 것만 셀 때의 판정선
+MIN_DARK_AREA_MM2 = 1.0       # 투명 앞면 고정(surface="front") 때 최소 크기. 2026-11-14 근접 촬영에서 마카 11곳 11/11,
+                              # 결함 없는 스캔 오검출 0 (어두운 것만 세면 먼지·흠집은 남지 않았다)
 CHROMA_Z = 6.0                # 색 차이 채널의 선명 결함 판정선 (흑백은 SHARP_Z)
 MIN_CHROMA_AREA_MM2 = 8.0     # 색 차이 채널은 잡음이 거칠어 이보다 작은 점은 결함으로 세지 않는다 (지름 약 3 mm)
 OUTLIER_RATIO = 0.25          # 국소 배경에서 이만큼 벗어난 픽셀은 배경 평균에서 뺀다
@@ -227,7 +229,8 @@ def quadrat_values(crops: dict, found: list[dict], P: int, per_die: int = 2) -> 
     return out
 
 
-def detection_channel(bgr: np.ndarray, meta: dict, use_chroma: bool = False) -> tuple[np.ndarray, dict]:
+def detection_channel(bgr: np.ndarray, meta: dict, use_chroma: bool = False,
+                      surface: str | None = None) -> tuple[np.ndarray, dict]:
     """검출에 쓸 한 장의 영상과 검출 설정 (channel, sharp_z, min_area_mm2, dark_only).
     - 밝은 바탕(불투명면): 흑백 그대로.
     - 어두운 바탕(투명 앞면): 흑백에서 주변보다 어두운 것만 센다. 표면 흠집·얼룩·반사는 희게, 붙은 결함은
@@ -235,6 +238,10 @@ def detection_channel(bgr: np.ndarray, meta: dict, use_chroma: bool = False) -> 
     - use_chroma: 색 차이(R−B). 카메라가 가깝고 조명 반사가 커서 흠집이 하얗게 빛나던 한 번(9/9)에서만
       나았고, 거리를 띄운 지금 환경에서는 0/8 이었다. 설정(detect_chroma)으로만 켠다."""
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    if surface == "front" and not use_chroma:
+        # 투명 앞면으로 고정: 격자선 밝기로 가르지 않는다. 웨이퍼 아래를 흰 판으로 바꾸자 격자선이 어둡게 보여
+        # 불투명면으로 오판했고, 흰 흠집·먼지까지 세어 오검출 17 다이가 나왔다(2026-11-14 17:35 스캔)
+        return gray, {"channel": "gray-dark", "sharp_z": DARK_ONLY_Z, "min_area_mm2": MIN_DARK_AREA_MM2, "dark_only": True}
     h, w = gray.shape
     (cx, cy), r = meta["wafer"]["center_px"], meta["wafer"]["radius_px"]
     yy, xx = np.mgrid[0:h, 0:w]

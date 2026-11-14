@@ -17,7 +17,7 @@ from .knowledge import DEFECT_TYPES
 
 SCAN_ROOT = os.path.join("captures", "scans")
 CACHE = "detection.json"
-VERSION = 8                     # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
+VERSION = 9                     # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
 
 
 def scan_dir(scan_id: str) -> str:
@@ -64,8 +64,9 @@ def detect(scan_id: str) -> dict:
         if cached.get("version") == VERSION:
             return cached
     meta = wafer_detect.load_meta(d)
-    gray, prof = wafer_detect.detection_channel(cv2.imread(map_path), meta,
-                                                use_chroma=bool(scan_config.load().get("detect_chroma")))
+    cfg = scan_config.load()
+    gray, prof = wafer_detect.detection_channel(cv2.imread(map_path), meta, use_chroma=bool(cfg.get("detect_chroma")),
+                                                surface=cfg.get("surface"))
     mask_path = os.path.join(d, meta.get("mask", ""))
     seen = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if meta.get("mask") and os.path.isfile(mask_path) else None
     r = wafer_detect.detect_array(gray, meta, seen=seen, min_area_mm2=prof["min_area_mm2"], sharp_z=prof["sharp_z"],

@@ -42,6 +42,8 @@ DEFAULTS = {
     "auto_map": True,
     # 투명 앞면 검출을 색 차이(R−B)로 한다. 기본은 흑백에서 어두운 것만 (wafer_detect.detection_channel 참고)
     "detect_chroma": False,
+    # 검사면 고정: "front"(투명 앞면) 이면 어두운 것만 결함으로 센다. None 이면 맵의 격자선 밝기로 자동 판단
+    "surface": None,
     "jpeg_quality": 92,
 }
 
