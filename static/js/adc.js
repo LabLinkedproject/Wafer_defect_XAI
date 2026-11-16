@@ -180,15 +180,12 @@
       const x = c + (d.x_mm - S.spec.pitch_mm / 2) * s;
       const y = c - (d.y_mm + S.spec.pitch_mm / 2) * s;
       const { fill, op } = dieFill(d, maxRel);
-      // 색만으로 뜻을 전하지 않게 칸에 글자를 같이 둔다
-      const mark = { defect: "불", recheck: "재" }[d.status];
-      const dark = mode === "xai" ? Math.abs(d.relevance / maxRel) > 0.55 : d.status === "defect";
+      // 판정 맵은 색으로만 구분한다 (사용자 지시 2026-11-16). 판정은 aria-label 과 다이 상세에 글로 남는다
       const label = `다이 ${d.id}, ${ZONE_KO[d.zone]} 존, ${STATUS_KO[d.status]}`;
       const attrs = interactive ? `class="die-cell${selected === d.id ? " sel" : ""}" data-id="${d.id}" tabindex="0" role="button" aria-label="${label}"` : "";
       html += `<g ${attrs}>
         <rect x="${x + 1}" y="${y + 1}" width="${p - 2}" height="${p - 2}" rx="2" fill="#fff" stroke="#9aa6b3"/>
         <rect x="${x + 2}" y="${y + 2}" width="${p - 4}" height="${p - 4}" rx="1" fill="${fill}" fill-opacity="${op}"/>
-        ${mark && interactive ? `<text x="${x + p / 2}" y="${y + p / 2 + 5}" text-anchor="middle" font-size="14" font-weight="700" fill="${dark ? "#fff" : "#17212e"}">${mark}</text>` : ""}
       </g>`;
     }
     html += `<path d="M${c - 8} ${c + R + 2}L${c + 8} ${c + R + 2}L${c} ${c + R - 9}Z" fill="#44505e"/>`;
@@ -199,7 +196,7 @@
   function renderMap() {
     drawMap($("wafer-map"), mode, true);
     const leg = {
-      status: `<span><i style="background:${css("--normal")}"></i>정상</span><span><i style="background:${css("--defect")}"></i>불 불량 (중심부 침범 또는 면적 5 % 이상)</span><span><i style="background:${css("--recheck")}"></i>재 재검사 (가장자리에 작게, 육안 판정)</span>`,
+      status: `<span><i style="background:${css("--normal")}"></i>정상</span><span><i style="background:${css("--defect")}"></i>불량 (중심부 침범 또는 면적 5 % 이상)</span><span><i style="background:${css("--recheck")}"></i>재검사 (가장자리에 작게, 육안 판정)</span>`,
       type: Object.entries(S.types).map(([k, t]) => `<span><i style="background:${css(TYPE_COLOR[k])}"></i>${esc(t.ko)}</span>`).join("") + "<span>진하면 불량, 옅으면 재검사</span>",
       xai: `<span><i class="grad" style="background:linear-gradient(90deg,#c4553f,#e6eef8,#004898)"></i>방해 ← 없음 → ${esc(S.xai.target)} 판정 지지</span>`,
     };

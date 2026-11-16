@@ -32,8 +32,8 @@ MIN_CONTRAST = 0.05           # 맵 합성 잔차보다 작은 밝기 차이는 
 MIN_STAIN_CONTRAST = 0.02
 MIN_SHARP_AREA = 5            # px
 MIN_STAIN_RATIO = 0.012       # 다이 면적 대비
-STAIN_MIN_AREA_MM2 = 30.0     # 선명한 덩어리도 이 크기 이상이면 스테인. 2026-11-16 실물: 파티클 최대 28.3, 스테인 최소 32.3 mm²
-STAIN_MIN_LENGTH_MM = 10.0    # 또는 이 길이 이상 (길쭉한 스크래치 제외). 파티클 최대 8.9, 스테인 최소 9.3 mm
+STAIN_MIN_AREA_MM2 = 60.0     # 면적만으로 스테인. 21:15 권역 스캔의 마카 파티클이 50 mm² 까지 커서 30 에서 올렸다
+STAIN_MIN_LENGTH_MM = 9.0     # 주 기준: 이 길이 이상이면 스테인. 실물 5 스캔 파티클 최대 8.9, 스테인 최소 9.3 mm
 UNSEEN_GAP_MM = 2.0           # 검사 제외 띠 양쪽에서 이만큼 뻗어 조각을 잇는다. 2026-11-16 실물 두 스캔에서 0·1.5·2·2.5·3 mm 중 개수 정확도 최고
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
@@ -45,6 +45,8 @@ CORNER_GUARD_MM = 4.0         # 다이 모서리(두 경계선 모두)에서 이
 CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 어긋남이 1~4.5 mm² 점 9개로 남았다
 EDGE_BAND_MM = 4.0            # 다이 가장자리 띠. 안쪽 24×24 mm 가 중심부 (docs/specs/die-verdict.md)
 DEFECT_AREA_RATIO = 0.05      # 다이 안 결함 면적이 이 비율 이상이면 위치와 상관없이 불량
+FULL_DARK = 0.2               # 합성 전체 이미지에서 주변보다 이 비율 이상 어두우면 결함 몸체 (스크래치·스테인 10 % 지점 0.21~0.24)
+GROW_LIMIT_MM = 4.0           # 다이 비교 씨앗에서 이 거리 안에서만 몸체를 따라간다 (렌즈 점·웨이퍼 밖 어둠은 멀리 있다)
 GROW_RATIO = 0.6              # 이중 문턱의 낮은 쪽 (높은 문턱 대비)
 DARK_BACKGROUND = 120          # 격자선 밝기 정보가 없는 예전 맵: 웨이퍼 안쪽 중앙값이 이보다 어두우면 투명 앞면
 CHROMA_GAIN = 3.0             # R−B 차이를 밝기 영상 범위로 늘리는 배율
@@ -285,10 +287,19 @@ def die_verdict(center_hit: bool, area_ratio: float) -> str:
     return "recheck" if area_ratio > 0 else "normal"
 
 
-def link_defects(crops: dict, P: int, shape: tuple) -> tuple[list[dict], dict]:
-    """다이별 조각을 웨이퍼 좌표에 놓고, 다이 경계(스크라이브)와 검사 제외 영역만 사이에 둔 조각을 하나로 잇는다.
-    결함 하나가 여러 다이에 걸칠 수 있다(2026-11-16 18:20 스크래치). 종류는 이은 전체 모양으로,
-    판정은 걸친 다이마다 낸다. 반환: 다이별 조각 목록(같은 결함은 obj 가 같다), {다이: 판정}."""
+def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
+                 ref: np.ndarray | None = None) -> tuple[list[dict], dict]:
+    """결함 분석은 합성 전체 이미지, 양불 판정은 다이 단위로 나눈다 (docs/specs/die-verdict.md).
+    1. 다이 비교 조각(오검출이 적다)을 씨앗으로 웨이퍼 좌표에 놓는다.
+    2. 합성 전체 이미지에서 씨앗 가까이의 어두운 몸체를 따라가 다이 경계·반사 띠로 끊긴 결함을 하나로 잇는다
+       (2026-11-16 18:20: 스크래치 하나가 다이마다 스크래치·스테인·파티클로 따로 나왔다).
+    3. 종류는 이은 결함에서 전체 이미지상 실제로 어두운 부분의 모양으로 정한다. 다이 비교의 격자선 잔차는 빠진다.
+    4. 판정은 다이 단위 분석으로만 낸다: 다이에 걸친 부분은 그 다이의 비교 검출(씨앗) 픽셀만 센다.
+       전체 이미지 몸체는 잇기와 종류에만 쓴다 (몸체가 이웃 다이로 번져 오검출된 다이 2·28, 2026-11-16).
+       반환: 다이별 조각 목록(같은 결함은 obj 가 같다), {다이: 판정}.
+    ref: 기준 다이(중앙값). 모든 다이에 같은 자리로 있는 어둠(렌즈 점 등)은 몸체로 따라가지 않는다.
+    follow_dark: 2 를 할지. 격자선이 어두운 불투명면에서는 선을 따라 번지므로 투명 앞면(dark_only)에서만 한다."""
+    shape = img.shape[:2]
     mm = WAFER_MODEL["pitch_mm"] / P
     defect, soft, known = np.zeros(shape, bool), np.zeros(shape, bool), np.zeros(shape, bool)
     for c in crops.values():
@@ -296,22 +307,42 @@ def link_defects(crops: dict, P: int, shape: tuple) -> tuple[list[dict], dict]:
         defect[win] |= c["pixels"]
         soft[win] |= c["soft_px"]
         known[win] |= c["mask"]
+    img = img.astype(np.float32)
+    bg = cv2.GaussianBlur(img, (0, 0), P / 6)
+    dark = ((bg - img) / np.maximum(bg, 1.0) > FULL_DARK) & (img > BACKGROUND_MAX)     # 미촬영(검정) 자리는 뺀다
+    if not follow_dark:
+        dark[:] = False
+    elif ref is not None:
+        rb = cv2.GaussianBlur(ref.astype(np.float32), (0, 0), P / 6)
+        static = cv2.dilate(((rb - ref) / np.maximum(rb, 1.0) > FULL_DARK).astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+        for c in crops.values():
+            dark[c["y"]:c["y"] + P, c["x"]:c["x"] + P] &= ~static
+    seeds = defect.astype(np.uint8)
+    lim = int(round(GROW_LIMIT_MM / mm))
+    # 몸체는 다이 비교로 볼 수 없던 곳(스크라이브·반사 띠)에서만 따라간다. 검사한 곳에서 비교 검출이 끊었다면
+    # 실제로 떨어진 결함이다 (가까운 파티클 두 개가 하나의 스테인으로 이어졌다, 2026-11-16 14:46 다이 32)
+    near = cv2.dilate(seeds, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * lim + 1,) * 2)) > 0
+    body = defect | (dark & near & ~known)
     gap = max(int(round(UNSEEN_GAP_MM / mm)), SCRIBE_MARGIN + 2)    # 스크라이브 여백(px)은 최소 넘어 잇는다
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * gap + 1, 2 * gap + 1))
-    grown = defect | (~known & (cv2.dilate(defect.astype(np.uint8), k) > 0))
+    grown = body | (~known & (cv2.dilate(body.astype(np.uint8), k) > 0))
     n, lab, stats, _ = cv2.connectedComponentsWithStats(grown.astype(np.uint8), connectivity=8)
     band = int(round(EDGE_BAND_MM / mm))
     found, parts, obj = [], {}, 0
     for i in range(1, n):
         x0, y0, bw, bh = stats[i, :4]
         win = np.s_[y0:y0 + bh, x0:x0 + bw]
-        mine = (lab[win] == i) & defect[win]
-        ys, xs = np.nonzero(mine)
-        if not len(xs):
-            continue
-        (_, _), (w, h), _ = cv2.minAreaRect(np.column_stack([xs, ys]).astype(np.float32))
+        mine = (lab[win] == i) & body[win]
+        if not (mine & defect[win]).any():
+            continue                                   # 씨앗 없는 어둠은 결함이 아니다
+        form = mine & dark[win]                        # 모양은 실제로 어두운 부분으로 (격자선 잔차 제외)
+        fy, fx = np.nonzero(form if form.sum() >= MIN_SHARP_AREA else mine)
+        (_, _), (w, h), _ = cv2.minAreaRect(np.column_stack([fx, fy]).astype(np.float32))
         long_mm = max(w, h) * mm
-        kind = _kind(bool(soft[win][mine].any()), len(xs) * mm * mm, long_mm, max(w, h) / max(min(w, h), 1.0))
+        # 번짐 채널 픽셀이 대부분일 때만 번짐 결함이다. 파티클 둘레 번짐이 이어 붙으면 파티클이 스테인이 됐다(21:15)
+        n_soft = int((soft[win] & mine).sum())
+        kind = _kind(n_soft * 2 > int(mine.sum()), len(fx) * mm * mm, long_mm, max(w, h) / max(min(w, h), 1.0))
+        ys, xs = np.nonzero(mine & defect[win])           # 다이 판정은 다이 비교 검출 픽셀로만
         xs, ys, obj = xs + x0, ys + y0, obj + 1
         for c in crops.values():
             inside = (xs >= c["x"]) & (xs < c["x"] + P) & (ys >= c["y"]) & (ys < c["y"] + P)
@@ -407,7 +438,7 @@ def detect_rectified(img: np.ndarray, valid: np.ndarray, P: int, per_die: int = 
     align(crops, P, golden)
     noise = analyse(crops, P, golden)
     extract(crops, P, noise, min_area_mm2, sharp_z, dark_only)
-    found, verdicts = link_defects(crops, P, img.shape[:2])
+    found, verdicts = link_defects(crops, P, img, follow_dark=dark_only, ref=noise["reference"])
     return {"inspected": sorted(crops), "defects": found, "verdicts": verdicts, "pitch_px": P,
             "noise": {k: round(v, 5) for k, v in noise.items() if k != "reference"},
             "shift_px": round(float(np.max([np.hypot(*c["shift"]) for c in crops.values()])), 2),

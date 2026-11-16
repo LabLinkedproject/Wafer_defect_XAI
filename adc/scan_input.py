@@ -18,7 +18,7 @@ from .knowledge import DEFECT_TYPES
 
 SCAN_ROOT = os.path.join("captures", "scans")
 CACHE = "detection.json"
-VERSION = 16                    # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
+VERSION = 20                    # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
 
 
 def scan_dir(scan_id: str) -> str:

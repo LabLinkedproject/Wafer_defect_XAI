@@ -12,14 +12,14 @@ P = 170
 SIDE = R.GRID_DIES * P
 
 
-def clean_map(seed=0):
-    """스크라이브 라인과 조명 기울기, 잡음이 있는 곧은 웨이퍼 맵"""
+def clean_map(seed=0, line=-25):
+    """스크라이브 라인과 조명 기울기, 잡음이 있는 곧은 웨이퍼 맵. line>0 이면 투명 앞면처럼 격자선이 밝다"""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:SIDE, 0:SIDE].astype(np.float32)
     g = 150 + 0.01 * xx + 0.008 * yy
     for k in range(R.GRID_DIES + 1):
-        g[:, max(k * P - 2, 0):k * P + 2] -= 25
-        g[max(k * P - 2, 0):k * P + 2, :] -= 25
+        g[:, max(k * P - 2, 0):k * P + 2] += line
+        g[max(k * P - 2, 0):k * P + 2, :] += line
     g = g + rng.normal(0, 0.4, g.shape)
     meta = {"wafer": {"center_px": [SIDE / 2 - 0.5, SIDE / 2 - 0.5], "radius_px": 135 / 32 * P},
             "grid": {"pitch_px": float(P), "angle_deg": 0.0}}
@@ -66,7 +66,7 @@ class Detect(unittest.TestCase):
         front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
         mm = P / 32
         a, b = R.die_slot(die_at(20))
-        g, meta = clean_map()
+        g, meta = clean_map(line=25)
         cv2.circle(g, (b * P + 85, a * P + 85), 5, 120, -1)                       # 20: 가운데 (실물만큼 옅게)
         a2, b2 = R.die_slot(die_at(27))
         cv2.circle(g, (int(b2 * P + 2.5 * mm), a2 * P + 85), 5, 120, -1)          # 27: 왼쪽 가장자리 2.5 mm
@@ -82,7 +82,7 @@ class Detect(unittest.TestCase):
     def test_scratch_across_two_dies_is_one_defect(self):
         # 2026-11-16 18:20 실물: 스크래치 하나가 다이 경계를 넘어 조각마다 파티클·스크래치로 따로 잡혔다
         front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
-        g, meta = clean_map()
+        g, meta = clean_map(line=25)
         a, b = R.die_slot(die_at(20))
         cv2.line(g, (b * P + 60, a * P + 70), (b * P + P + 110, a * P + 100), 110, 3)  # 20 → 21 (오른쪽 이웃)
         r = W.detect_array(g, meta, **front)
@@ -91,10 +91,26 @@ class Detect(unittest.TestCase):
         self.assertEqual({d["type"] for d in parts}, {"scratch"})
         self.assertEqual(len({d["obj"] for d in parts}), 1)
 
+    def test_scratch_cut_by_wide_unseen_band_is_one_scratch(self):
+        # 2026-11-16 18:20 실물: 반사 띠(최대 5 mm)가 스크래치를 끊어 한쪽은 스크래치, 다른 쪽은 스테인으로 나왔다.
+        # 결함 모양은 합성 전체 이미지에서 따라가므로 띠 너머까지 하나로 잡혀야 한다
+        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
+        g, meta = clean_map(line=25)
+        a, b = R.die_slot(die_at(20))
+        cv2.line(g, (b * P + 20, a * P + 85), (b * P + P + 110, a * P + 85), 110, 3)
+        seen = np.full(g.shape, 255, np.uint8)
+        seen[a * P + 60:a * P + 110, b * P + 70:b * P + 100] = 0           # 다이 20 안의 약 5.6 mm 미검사 띠
+        r = W.detect_array(g, meta, seen=seen, **front)
+        parts = [d for d in r["defects"] if d["die"] in (20, 21)]
+        self.assertEqual(len({d["obj"] for d in parts}), 1)
+        self.assertEqual({d["type"] for d in parts}, {"scratch"})
+
     def test_kind_rules(self):
         self.assertEqual(W._kind(False, 4.0, 2.5, 1.2), "particle")
         self.assertEqual(W._kind(False, 26.8, 14.8, 2.1), "stain")      # 반사 마스크에 반쯤 가린 스테인 (길이로)
-        self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 면적으로
+        self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 길이로
+        self.assertEqual(W._kind(False, 45.9, 7.9, 1.3), "particle")    # 큰 마카 점 (21:15 권역 스캔)
+        self.assertEqual(W._kind(False, 70.0, 8.5, 1.1), "stain")       # 면적으로
         self.assertEqual(W._kind(False, 12.0, 20.0, 6.0), "scratch")    # 길쭉하면 길어도 스크래치
         self.assertEqual(W._kind(True, 5.0, 3.0, 1.0), "stain")         # 번짐 채널
         self.assertEqual(W._kind(True, 60.0, 40.0, 8.0), "scratch")     # 번짐 조각이 붙은 긴 스크래치
@@ -104,10 +120,10 @@ class Detect(unittest.TestCase):
         front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)   # 실물 투명 앞면 설정
         mm = P / 32
         a, b = R.die_slot(die_at(20))
-        g, meta = clean_map()
+        g, meta = clean_map(line=25)
         cv2.circle(g, (int(b * P + 2.5 * mm), int(a * P + P - 2.5 * mm)), 5, 60, -1)    # 왼쪽 아래 모서리에서 2.5 mm
         self.assertEqual(W.detect_array(g, meta, **front)["defects"], [])
-        g, meta = clean_map()
+        g, meta = clean_map(line=25)
         cv2.circle(g, (b * P + 85, a * P + 85), 5, 60, -1)                              # 같은 점이 가운데면 센다
         self.assertEqual([d["type"] for d in W.detect_array(g, meta, **front)["defects"]], ["particle"])
 
