@@ -66,6 +66,18 @@
     if (currentId) $(`die-${currentId}`)?.classList.add("current");
   }
 
+  // 대기 중에는 고른 검사 기록의 다이 사진으로 격자를 채운다 (빈 격자가 첫 화면을 차지하지 않게)
+  let shownRecord = null;
+  async function showRecord(id) {
+    if (!id || id === shownRecord || !plan) return;
+    shownRecord = id;
+    try {
+      const m = await (await fetch(`/scans/${id}/manifest.json`)).json();
+      clearMosaic();
+      fillMosaic(m.dies.filter((d) => d.file), null);
+    } catch (e) { shownRecord = null; }
+  }
+
   function clearMosaic() {
     document.querySelectorAll(".die.done").forEach((cell) => {
       cell.classList.remove("done");
@@ -155,7 +167,8 @@
       const m = /다이 (\d+)/.exec(j.message || "");
       if (m) currentId = Number(m[1]);
     }
-    fillMosaic(s.scan.results, currentId);
+    if (busy) fillMosaic(s.scan.results, currentId);
+    else showRecord($("scenario").value);
     renderMap(s);
     drawMinimap();
   }
@@ -225,6 +238,7 @@
 
   // ── 이벤트 ───────────────────────────────────────────────────
   $("btnScan").onclick = () => {
+    shownRecord = null;
     clearMosaic();
     const p = status && status.position;
     const where = p ? `기록상 갠트리 위치 (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) mm 에서 출발합니다. ` +

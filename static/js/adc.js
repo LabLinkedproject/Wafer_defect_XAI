@@ -116,6 +116,7 @@
     const map = inputMode === "result" ? S.wafer_map.result : S.wafer_map;
     document.querySelectorAll("#input-modes button").forEach((b) => {
       b.classList.toggle("on", b.dataset.v === inputMode);
+      b.setAttribute("aria-pressed", b.dataset.v === inputMode);
       b.disabled = !usable || (b.dataset.v === "result" && !hasResult);
       if (b.dataset.v === "result") b.hidden = !hasResult;
     });

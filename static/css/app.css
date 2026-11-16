@@ -1,8 +1,8 @@
 /* Wafer Defect XAI — 한 화면. 팹 웨이퍼 테스트 리포트(빈 맵 출력물)의 문법: 흰 출력지, 먹색 글자, 괘선, 빈 색 다이 격자, 표. */
 
-@font-face { font-family: "Noto Sans KR"; src: url("../fonts/NotoSansKR-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "Noto Sans KR"; src: url("../fonts/NotoSansKR-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
-@font-face { font-family: "JetBrains Mono"; src: url("../fonts/JetBrainsMono.ttf") format("truetype"); font-weight: 100 800; font-display: swap; }
+@font-face { font-family: "Noto Sans KR"; src: url("../fonts/NotoSansKR-Regular.woff") format("woff"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Noto Sans KR"; src: url("../fonts/NotoSansKR-Bold.woff") format("woff"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("../fonts/JetBrainsMono.woff") format("woff"); font-weight: 100 800; font-display: swap; }
 
 :root {
   --desk: #e7e9ec;
@@ -18,7 +18,7 @@
   --blue-soft: #e8eef7;
   /* 빈(bin) 색: 다이 판정 */
   --normal: #e2e6e9;
-  --light: #e3a922;
+  --light: #b78300;   /* 흰 바탕 대비 3.4:1 (비텍스트 3:1 기준) */
   --heavy: #c13f2c;
   /* 결함 종류 */
   --particle: #1c6d88;
@@ -257,6 +257,8 @@ details.panel > summary .pos { margin-left: auto; font-weight: 400; font-size: 0
 .die-cell { cursor: pointer; }
 .die-cell:hover rect:first-child { stroke: var(--blue); stroke-width: 2; }
 .die-cell.sel rect:first-child { stroke: var(--blue); stroke-width: 3; }
+.die-cell:focus { outline: none; }
+.die-cell:focus-visible rect:first-child { stroke: var(--ink); stroke-width: 3; stroke-dasharray: 4 2; }
 .legend { display: flex; flex-wrap: wrap; gap: 0.25rem 0.8rem; font-size: 0.78rem; color: var(--muted); margin: 0.4rem 0; min-height: 1.4rem; align-items: center; }
 .legend i { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 1px; margin-right: 0.25rem; vertical-align: -1px; }
 .legend i.grad { width: 4.5rem; }
@@ -279,7 +281,7 @@ button.bar-row:hover, button.bar-row.sel { background: var(--blue-soft); }
 .bar-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-row .name small { color: var(--muted); }
 .bar-track { position: relative; height: 0.8rem; background: var(--paper-2); border: 1px solid var(--rule); border-radius: 1px; }
-.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--rule-2); transition: width 0.25s ease-out; }
+.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #80878f; transition: width 0.25s ease-out; }
 .bar-fill.on { background: var(--blue); }
 .bar-mark { position: absolute; top: -0.25rem; bottom: -0.25rem; width: 2px; background: var(--ink); }
 .bar-val { text-align: right; }
