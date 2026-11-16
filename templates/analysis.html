@@ -233,6 +233,28 @@
     </section>
 
     <!-- 모델 구성 -->
+    <!-- 실물 검증 기록 (스캔 결과일 때만) -->
+    <section class="block" id="s-truth" hidden>
+      <header class="block-head">
+        <span class="step">✓</span>
+        <div><h2>실물 검증 기록</h2><p>이 웨이퍼에 직접 넣은 결함을 적으면 검출 결과와 다이 단위로 비교합니다. 기록은 스캔 폴더에 남아 이후 실물 학습·검증 데이터가 됩니다.</p></div>
+      </header>
+      <article class="card truth-card">
+        <div class="truth-form">
+          <label class="field"><span>검증 단계</span>
+            <select id="truth-stage"><option value="1">1단계 단일 결함</option><option value="2">2단계 대표 패턴</option><option value="3">3단계 복합 패턴</option></select>
+          </label>
+          <label class="field"><span>파티클 다이</span><input id="truth-particle" inputmode="numeric" placeholder="예: 3, 6, 14"></label>
+          <label class="field"><span>스크래치 다이</span><input id="truth-scratch" inputmode="numeric" placeholder="예: 20, 21"></label>
+          <label class="field"><span>스테인 다이</span><input id="truth-stain" inputmode="numeric" placeholder="예: 33"></label>
+          <fieldset class="truth-patterns"><legend>의도한 패턴</legend><div id="truth-patterns"></div></fieldset>
+          <label class="field truth-note"><span>메모</span><input id="truth-note" placeholder="그린 방법, 크기 등"></label>
+          <button class="btn primary" id="truth-save" type="button">기록 저장</button>
+        </div>
+        <p class="note" id="truth-result" role="status"></p>
+      </article>
+    </section>
+
     <section class="block last">
       <details class="card modelinfo">
         <summary>현재 모델 구성과 교체 계획</summary>
@@ -248,5 +270,6 @@
   <script src="{{ url_for('static', filename='js/wafer_view.js') }}"></script>
   <script src="{{ url_for('static', filename='js/scan_progress.js') }}"></script>
   <script src="{{ url_for('static', filename='js/adc.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/truth.js') }}"></script>
 </body>
 </html>

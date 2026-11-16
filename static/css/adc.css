@@ -278,3 +278,11 @@ legend { font-size: 0.82rem; color: var(--muted); padding: 0; }
   .c-row { grid-template-columns: 110px minmax(0, 1fr) 46px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+
+/* 실물 검증 기록 */
+.truth-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 14px; align-items: end; }
+.truth-form input, .truth-form select { width: 100%; padding: 6px 8px; border: 1px solid var(--border, #d0d7de); border-radius: 6px; }
+.truth-patterns { grid-column: 1 / -1; border: 1px solid var(--border, #d0d7de); border-radius: 6px; padding: 6px 10px; }
+.truth-patterns label { margin-right: 14px; white-space: nowrap; font-size: 0.86rem; }
+.truth-note { grid-column: span 2; }
+#truth-result b { color: var(--blue-deep); }

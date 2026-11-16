@@ -59,6 +59,7 @@
     renderTrace();
     renderAction();
     renderEngines();
+    document.dispatchEvent(new CustomEvent("adc:state", { detail: S }));   // 실물 검증 기록(truth.js)이 듣는다
   }
 
   function renderHeader() {

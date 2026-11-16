@@ -50,7 +50,10 @@ def clean(data: dict) -> dict:
     bad = [p for p in patterns if p not in PATTERNS]
     if bad:
         raise ValueError(f"알 수 없는 패턴: {', '.join(bad)}")
-    return {"stage": stage, "dies": dies, "patterns": patterns, "note": str(data.get("note") or "")[:500]}
+    # 저장 시점의 AI 패턴 판정 (집계 때 모델을 다시 돌리지 않도록)
+    judged = sorted({str(p) for p in data.get("judged") or [] if str(p) in PATTERNS})
+    return {"stage": stage, "dies": dies, "patterns": patterns, "judged": judged,
+            "note": str(data.get("note") or "")[:500]}
 
 
 def save(scan_id: str, data: dict) -> dict:
