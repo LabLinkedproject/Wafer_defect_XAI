@@ -61,6 +61,9 @@ def main() -> int:
             scan_input.detect(sid)                                      # 분석 화면이 바로 쓰도록 미리 계산
             from adc import truth
             truth.record(sid)                                           # 정답이 있으면 혼동행렬을 데이터로 남긴다
+            from adc import overlay
+            if overlay.build(sid):                                      # 템플릿 위에 검출 결함을 붙인 결과 화면
+                say("log", "결과 화면(템플릿 + 검출) 생성")
         except Exception as e:                                          # 맵은 이미 저장됐다. 분석 화면이 다시 시도한다
             say("log", f"결함 검출 실패 ({e})")
     except Exception as e:

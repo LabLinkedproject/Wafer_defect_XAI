@@ -111,17 +111,22 @@
 
   // ── 입력 이미지 ──────────────────────────────────────────────
   function renderInput() {
-    const map = S.wafer_map;
-    const usable = !!(map && map.wafer);
+    const usable = !!(S.wafer_map && S.wafer_map.wafer);
     const scan = S.session.source === "scan";
-    if (scan && usable) inputMode = "real";
+    const hasResult = !!(scan && S.wafer_map && S.wafer_map.result && S.wafer_map.result.wafer);
+    if (scan && usable && inputMode !== "result") inputMode = "real";
+    if (inputMode === "result" && !hasResult) inputMode = "real";
     if (inputMode === null || (inputMode === "real" && !usable)) inputMode = usable ? "real" : "sim";
-    const real = inputMode === "real";
+    const real = inputMode === "real" || inputMode === "result";
+    // 결과 화면: 순정 웨이퍼 템플릿 좌표의 이미지라 템플릿 맵 정보로 그린다 (검출 표시·격자도 그 좌표로)
+    const map = inputMode === "result" ? S.wafer_map.result : S.wafer_map;
     document.querySelectorAll("#input-modes button").forEach((b) => {
       b.classList.toggle("on", b.dataset.v === inputMode);
-      b.disabled = (b.dataset.v === "real" && !usable) || (b.dataset.v === "sim" && scan);
+      b.disabled = (b.dataset.v === "real" && !usable) || (b.dataset.v === "sim" && scan) ||
+        (b.dataset.v === "result" && !hasResult);
+      if (b.dataset.v === "result") b.hidden = !hasResult;
     });
-    $("input-title").textContent = real ? "웨이퍼 맵" : "입력 이미지";
+    $("input-title").textContent = inputMode === "result" ? "결과 (순정 템플릿 + 검출 결함)" : real ? "웨이퍼 맵" : "입력 이미지";
     $("real-view").hidden = !real;
     $("input-img").hidden = real;
     $("input-overlay").style.display = real ? "none" : "";
@@ -133,10 +138,12 @@
         color: css(TYPE_COLOR[f.type]), title: `다이 ${f.die} · ${S.types[f.type].ko} · ${f.area_mm2} mm²`,
       })) : null;
       WaferView.draw($("real-view"), map, { grid: $("show-grid").checked, selected: selected, marks, pitchMm: S.spec.pitch_mm });
-      const cov = map.coverage_pct;
+      const cov = S.wafer_map.coverage_pct;
       if (scan) {
         const by = Object.values(S.types).filter((t) => t.count).map((t) => `${t.ko} ${t.count}`).join(" · ") || "결함 없음";
-        $("input-note").textContent = `촬영 ${map.images}장 합성 맵 · 커버리지 ${cov}% · 기준 다이 비교로 검출 ${S.found.length}건 (${by})`;
+        $("input-note").textContent = inputMode === "result"
+          ? `순정 웨이퍼(${map.dir}) 위에 검출 결함 ${S.found.length}건의 실제 모습을 붙인 결과 · 놓친 결함은 '실측 맵'에서 확인하세요`
+          : `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${cov}% · 기준 다이 비교로 검출 ${S.found.length}건 (${by})`;
       } else {
         $("input-note").textContent = `촬영 ${map.images}장을 한 장으로 합성 · 웨이퍼 커버리지 ${cov}%` +
           (cov < 98 ? ". 스캔 콘솔에서 정렬 후 재스캔하면 전체를 담습니다." : "");
