@@ -644,6 +644,25 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
         lc = light
     white = np.maximum(lc, floor)
     imgs = [x / white[..., None] for x in imgs]
+    # 카메라 자신의 반사(렌즈·기판)는 모든 사진의 같은 자리에 같은 무늬로 더해진다. 그 자리에서 사진들의 채널별
+    # 중앙값과 그 매끈한 배경의 차이(= 반사 무늬)를 각 사진에서 뺀다. 메우면(인페인팅) 그 자리의 실제 결함까지
+    # 지워졌고(2026-11-16 15번 다이), 나누면 더해진 빛이라 지워지지 않았다
+    if lens_fill.any():
+        zone = cv2.dilate(lens_fill.astype(np.uint8), np.ones((9, 9), np.uint8))
+        if zone.shape != imgs[0].shape[:2]:
+            zone = cv2.resize(zone, (imgs[0].shape[1], imgs[0].shape[0]), interpolation=cv2.INTER_NEAREST)
+        ys_, xs_ = np.nonzero(zone)
+        pad = 24
+        y0_, y1_ = max(0, ys_.min() - pad), min(zone.shape[0], ys_.max() + pad + 1)
+        x0_, x1_ = max(0, xs_.min() - pad), min(zone.shape[1], xs_.max() + pad + 1)
+        med_c = np.median(np.stack([x[y0_:y1_, x0_:x1_] for x in imgs]), 0)
+        sig_ = max(6.0, 0.25 * float(min(y1_ - y0_, x1_ - x0_)))
+        bg_c = np.stack([cv2.GaussianBlur(np.ascontiguousarray(med_c[..., k]), (0, 0), sig_) for k in range(3)], -1)
+        w_ = cv2.GaussianBlur(zone[y0_:y1_, x0_:x1_].astype(np.float32), (0, 0), 3)[..., None]
+        static = (med_c - bg_c) * w_
+        for x in imgs:
+            x[y0_:y1_, x0_:x1_] -= static
+        log("카메라 반사 무늬를 사진들의 공통 모습으로 빼서 지움")
     # 최종 맵은 포화된 반사만 빼고 모두 담는다. 카메라 반사·조명 고리 번짐 자리를 검게 비워 두면 화면에 없는
     # 검은 반점으로 보이고 그 자리가 사각지대가 됐다(2026-11-16). 대신 그 자리만으로 찍힌 곳을 '약한 구역'으로
     # 따로 저장해, 기준 웨이퍼 없이 같은 웨이퍼 다이끼리 비교할 때만 뺀다 (wafer_detect)
@@ -676,7 +695,8 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     if wafer:
         # 화면용 맵은 카메라 반사(렌즈·기판)·조명 번짐·미촬영 자리를 지우고 주변 웨이퍼 결로 이어 메운다(인페인팅).
         # 사용자 요청(2026-11-16): 결함 없는 웨이퍼 결과가 깨끗하게 보이도록. 검출용 맵·마스크는 그대로다
-        _, den_view = _compose(zeros, lc, cpos, Ac, S, SZ, kc, gains, glare=to_c(glare | halo | lens_fill))
+        # 메우는 곳은 정보가 없는 자리(모든 사진에서 포화된 다이 경계)뿐이다. 반사 무늬는 위에서 이미 지웠고,
+        # 번짐 구간은 결함이 보일 수 있어 그대로 둔다
         # 메우는 범위는 검사 다이 44개의 칸 안으로만 (다이 밖 가장자리까지 메우면 줄무늬로 번졌다)
         sx_ = 1 if int((man.get("config") or {}).get("wafer_sign_x", 1)) >= 0 else -1
         sy_ = 1 if int((man.get("config") or {}).get("wafer_sign_y", 1)) >= 0 else -1
@@ -688,7 +708,7 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
             y0_, y1_ = max(0, int(py_ - half)), min(SZ[0], int(py_ + half))
             x0_, x1_ = max(0, int(px_ - half)), min(SZ[1], int(px_ + half))
             inside[y0_:y1_, x0_:x1_] = True
-        hole = inside & ~(den_view > 0.02)
+        hole = inside & ~mask
         if hole.any():
             hole_u8 = cv2.dilate(hole.astype(np.uint8), np.ones((5, 5), np.uint8))
             out = cv2.inpaint(out, hole_u8, max(3, int(round(S))), cv2.INPAINT_TELEA)
