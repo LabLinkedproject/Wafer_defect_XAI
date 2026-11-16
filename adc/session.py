@@ -13,7 +13,7 @@ from datetime import datetime
 import scan_config
 import wafer_model
 import wafer_stitch
-from . import cnn, engine, render, scan_input, scenarios, scoring
+from . import cnn, engine, scan_input, scenarios, scoring
 from .knowledge import CHECKS, DEFECT_TYPES, PATTERNS
 
 FEEDBACK_FILE = "adc_feedback.jsonl"
@@ -140,11 +140,6 @@ class Session:
             res = dict(self._cache)
             res["scans"] = scan_input.scans()
             return res
-
-    def input_image(self) -> bytes:
-        with self._lock:
-            spec, dies = self._model()
-            return render.render_input(dies, self.defects, spec["pitch_mm"], spec["diameter_mm"])
 
     def feedback_count(self) -> int:
         try:

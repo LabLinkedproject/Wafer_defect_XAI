@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wafer Defect XAI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand">
+      <h1>Wafer Defect XAI</h1>
+      <p id="specLine">270 mm · 44다이</p>
+    </div>
+    <label class="field record">
+      <span>검사 기록</span>
+      <select id="scenario" aria-label="볼 스캔 고르기"></select>
+    </label>
+    <div class="chips" aria-label="장비 상태">
+      <span class="chip" id="chipGpio">GPIO</span>
+      <span class="chip" id="chipOrigin">원점</span>
+      <span class="chip" id="chipCal">보정</span>
+      <span class="chip" id="chipDry" hidden>DRY-RUN</span>
+    </div>
+  </header>
+
+  <nav class="index" aria-label="검사 순서">
+    <a href="#s-scan"><b>1</b>스캔</a>
+    <a href="#s-input"><b>2</b>결과<small id="eng-detector"></small></a>
+    <a href="#s-adc"><b>3</b>판정<small id="eng-classifier"></small></a>
+    <a href="#s-xai"><b>4</b>근거<small id="eng-explainer"></small></a>
+    <a href="#s-think"><b>5</b>원인<small id="eng-inference"></small></a>
+    <a href="#s-action"><b>6</b>조치</a>
+  </nav>
+
+  <div class="banner" id="banner" role="alert" hidden></div>
+  <div class="errbar" id="errbar" role="alert" hidden></div>
+  <p class="simbar" id="simbar" role="status"></p>
+
+  <main>
+    <!-- 1. 스캔 -->
+    <section class="block" id="s-scan" aria-labelledby="h-scan">
+      <header class="block-head">
+        <span class="step">1</span>
+        <div><h2 id="h-scan">스캔</h2><p>버튼 한 번으로 44개 다이를 찍고, 웨이퍼 맵 합성과 결함 검출까지 이어서 합니다. 끝나면 아래 결과가 자동으로 바뀝니다.</p></div>
+      </header>
+      <div class="scan-grid">
+        <div class="scan-run">
+          <figure class="camera">
+            <img id="cam" src="/video_feed" alt="카메라 실시간 영상">
+            <span class="crosshair" aria-hidden="true"></span>
+            <figcaption>실시간 카메라 · 가운데 십자선이 촬영 기준점</figcaption>
+          </figure>
+          <div class="run-buttons">
+            <button type="button" class="btn primary big" id="btnScan">웨이퍼 스캔 시작</button>
+            <button type="button" class="btn danger big" id="btnStop">정지</button>
+          </div>
+          <p class="eta" id="eta"></p>
+          <div id="jobPlain">
+            <div class="progress"><div class="bar" id="bar"></div></div>
+            <div class="job-line"><span id="jobMsg">대기 중</span><span class="num" id="jobCount"></span></div>
+          </div>
+          <div id="flow"></div>
+        </div>
+        <div class="scan-map">
+          <div class="mosaic" id="mosaic" aria-label="다이별 촬영 진행"></div>
+          <p class="note">찍힌 다이부터 자리에 채워집니다. 사진을 누르면 원본이 열립니다.</p>
+        </div>
+      </div>
+
+      <details class="panel" id="rig">
+        <summary>장비 <span class="num pos" id="posLine">X —  Y —</span></summary>
+        <div class="rig-grid">
+          <div>
+            <h3>위치</h3>
+            <div class="jogpad">
+              <span></span><button type="button" class="btn jog" data-axis="y" data-dir="1">Y+</button><span></span>
+              <button type="button" class="btn jog" data-axis="x" data-dir="-1">X−</button>
+              <select id="stepSel" aria-label="이동 단위">
+                <option value="1">1 mm</option>
+                <option value="5">5 mm</option>
+                <option value="10" selected>10 mm</option>
+                <option value="32">32 mm (1다이)</option>
+                <option value="50">50 mm</option>
+              </select>
+              <button type="button" class="btn jog" data-axis="x" data-dir="1">X+</button>
+              <span></span><button type="button" class="btn jog" data-axis="y" data-dir="-1">Y−</button><span></span>
+            </div>
+            <div class="row">
+              <button type="button" class="btn accent" id="btnSetOrigin" title="모터는 움직이지 않습니다">여기를 원점으로</button>
+              <button type="button" class="btn" id="btnOrigin">원점으로 이동</button>
+            </div>
+            <p class="note">갠트리를 손으로 옮겼다면 웨이퍼 정중앙(22·23·29·30번 다이가 만나는 점)에 맞추고 <b>여기를 원점으로</b>를 누른 뒤 스캔하세요. 위치 센서가 없어 손으로 옮긴 것을 모릅니다.</p>
+          </div>
+          <div>
+            <h3>갠트리 범위</h3>
+            <svg id="minimap" viewBox="0 0 220 190" role="img" aria-label="갠트리 좌표 미니맵"></svg>
+          </div>
+          <div>
+            <h3>카메라 노출</h3>
+            <div class="row">
+              <input type="range" id="expo" min="1" max="200" step="1" value="20" aria-label="노출">
+              <span class="num" id="expoVal">20</span>
+              <label class="switch"><input type="checkbox" id="expoAuto"> 자동</label>
+            </div>
+            <p class="note">화면용 밝기입니다. 촬영 노출은 스캔 때 자동으로 맞춥니다.</p>
+            <h3>합성 맵</h3>
+            <p class="note" id="mapMeta">아직 합성된 맵이 없습니다</p>
+            <dl class="facts" id="mapFacts"></dl>
+            <button type="button" class="btn" id="btnMap">맵 다시 합성</button>
+            <p class="note" id="mapHint"></p>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- 판정 요약 -->
+    <section class="verdict" aria-labelledby="verdict-title">
+      <div class="verdict-main">
+        <h2 id="verdict-title">-</h2>
+        <p id="verdict-sub"></p>
+        <div class="labels" id="verdict-labels"></div>
+      </div>
+      <table class="kpis">
+        <thead><tr><th scope="col">판정 점수</th><th scope="col">예상 수율</th><th scope="col">위험도</th><th scope="col">유력 원인</th></tr></thead>
+        <tbody><tr>
+          <td><strong id="k-score">-</strong><em id="k-margin"></em></td>
+          <td><strong id="k-yield">-</strong><em id="k-yield-sub"></em></td>
+          <td><strong id="k-risk">-</strong><em id="k-risk-sub"></em></td>
+          <td><strong class="small" id="k-cause">-</strong><em id="k-cause-sub"></em></td>
+        </tr></tbody>
+      </table>
+      <p class="verdict-line" id="verdict-line"></p>
+    </section>
+
+    <!-- 2. 결과 -->
+    <section class="block" id="s-input" aria-labelledby="h-input">
+      <header class="block-head">
+        <span class="step">2</span>
+        <div><h2 id="h-input">무엇을 보았나</h2><p>합성한 웨이퍼 맵의 결함을 다이 지도로 옮깁니다. 다이를 누르면 상세가 열리고 직접 고칠 수 있습니다.</p></div>
+      </header>
+      <div class="grid g-input">
+        <article class="card">
+          <div class="card-head">
+            <h3 id="input-title">웨이퍼 맵</h3>
+            <div class="segmented" id="input-modes" role="radiogroup" aria-label="맵 표시">
+              <button type="button" data-v="real" title="실제 촬영 사진 (카메라 반사·미촬영 자리만 정리)">실측 맵</button>
+              <button type="button" data-v="result" title="순정 웨이퍼 템플릿 위에 검출한 결함의 실제 조각을 붙인 결과">결과 (템플릿)</button>
+            </div>
+          </div>
+          <div class="wafer-image">
+            <div id="real-view" class="fill"></div>
+            <p class="empty-map" id="map-empty">스캔을 마치면 촬영본을 한 장의 웨이퍼로 합성해 여기에 보여 줍니다.</p>
+          </div>
+          <div class="input-foot">
+            <label class="switch" id="overlay-wrap"><input type="checkbox" id="show-overlay" checked> 검출 표시</label>
+            <label class="switch" id="grid-wrap"><input type="checkbox" id="show-grid" checked> 다이 격자</label>
+          </div>
+          <p class="note" id="input-note"></p>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h3>다이 판정 맵</h3>
+            <div class="segmented" role="radiogroup" aria-label="맵 표시 방식" id="map-modes">
+              <button type="button" data-mode="status" class="on">상태</button>
+              <button type="button" data-mode="type">유형</button>
+              <button type="button" data-mode="heat">밀도</button>
+              <button type="button" data-mode="xai">XAI</button>
+            </div>
+          </div>
+          <svg id="wafer-map" viewBox="0 0 520 520" role="group" aria-label="44다이 웨이퍼 맵"></svg>
+          <div class="legend" id="map-legend"></div>
+          <label class="switch"><input type="checkbox" id="show-zones" checked> 존 경계 표시</label>
+        </article>
+
+        <article class="card inspector" id="inspector">
+          <div class="card-head"><h3>다이 상세</h3></div>
+          <div id="inspector-body"></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 3. 판정 -->
+    <section class="block" id="s-adc" aria-labelledby="h-adc">
+      <header class="block-head">
+        <span class="step">3</span>
+        <div><h2 id="h-adc">어떤 결함인가</h2><p>WM-811K 8종 패턴을 복수 라벨로 분류합니다. 패턴을 누르면 그 판정의 근거를 아래 4단계에서 볼 수 있습니다.</p></div>
+      </header>
+      <div class="grid g-adc">
+        <article class="card span2">
+          <div class="card-head"><h3>패턴 점수</h3><span class="muted" id="thr-note"></span></div>
+          <div id="pattern-bars" class="bars"></div>
+        </article>
+        <article class="card">
+          <div class="card-head"><h3>결함 유형 비율</h3></div>
+          <div class="ratio">
+            <svg id="type-ring" viewBox="0 0 120 120" role="img" aria-label="결함 유형 비율"></svg>
+            <ul id="type-list" class="tlist"></ul>
+          </div>
+        </article>
+      </div>
+      <details class="more">
+        <summary>자세히: 존별 점유율 · 둘레 방향 분포 · Stain 영역</summary>
+        <div class="grid g-more">
+          <article class="card">
+            <div class="card-head"><h3>존별 점유율</h3><span class="muted">존 다이 중 불량 다이</span></div>
+            <div id="zone-bars" class="bars compact"></div>
+          </article>
+          <article class="card">
+            <div class="card-head"><h3>둘레 방향 분포</h3></div>
+            <svg id="rose" viewBox="0 0 200 200" role="img" aria-label="8방위 결함 분포"></svg>
+          </article>
+          <article class="card" id="stain-card">
+            <div class="card-head"><h3>Stain 영역</h3></div>
+            <dl class="facts" id="stain-facts"></dl>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <!-- 4. 근거 -->
+    <section class="block" id="s-xai" aria-labelledby="h-xai">
+      <header class="block-head">
+        <span class="step">4</span>
+        <div><h2 id="h-xai">왜 그렇게 판단했나</h2><p>판정을 근거로 분해하고, 다이를 가려 보며, 무엇이 달랐다면 판정이 바뀌는지 계산합니다.</p></div>
+      </header>
+      <div class="grid g-xai">
+        <article class="card">
+          <div class="card-head"><h3 id="xai-title">판정 근거</h3><span class="muted" id="xai-meta"></span></div>
+          <div class="xai-split">
+            <div>
+              <div id="contrib" class="contrib"></div>
+              <p class="note">오른쪽은 판정을 지지하고, 왼쪽은 판정을 약화합니다. 값은 로그오즈 기여도입니다.</p>
+            </div>
+            <figure class="xai-fig">
+              <svg id="xai-mini" viewBox="0 0 520 520" role="img" aria-label="다이 가림 시험 결과"></svg>
+              <figcaption>다이 가림 시험. 진할수록 판정을 크게 지지합니다.</figcaption>
+            </figure>
+          </div>
+        </article>
+        <article class="card">
+          <div class="card-head"><h3>반사실 설명</h3></div>
+          <div id="cf-body"></div>
+          <button type="button" class="btn ghost" id="show-xai-map">맵에서 기여 다이 보기</button>
+          <p class="note">결함 다이를 하나씩 지워 점수 변화를 잽니다.</p>
+        </article>
+      </div>
+      <details class="more">
+        <summary>자세히: 위험도 구성</summary>
+        <div class="grid g-more">
+          <article class="card">
+            <div class="card-head"><h3>위험도 구성</h3><span class="num" id="risk-num"></span></div>
+            <div id="risk-terms" class="bars compact"></div>
+            <p class="note" id="risk-advice"></p>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <!-- 5. 원인 -->
+    <section class="block" id="s-think" aria-labelledby="h-think">
+      <header class="block-head">
+        <span class="step">5</span>
+        <div><h2 id="h-think">무엇이 원인인가</h2><p>가설을 세우고, 가장 유용한 확인 항목을 골라 묻고, 답을 받으면 판단을 바꿉니다.</p></div>
+      </header>
+      <div class="grid g-think">
+        <article class="card">
+          <div class="card-head"><h3>원인 가설</h3><span class="muted" id="entropy"></span></div>
+          <div id="hyp-bars" class="bars"></div>
+          <p class="note">막대는 현재 확률, 눈금은 영상 근거만으로 낸 확률입니다. 확률은 전문가 추정 우도로 계산합니다.</p>
+        </article>
+        <article class="card">
+          <div class="card-head"><h3>다음 확인 항목</h3><button type="button" class="btn ghost small" id="undo" hidden>답변 되돌리기</button></div>
+          <div id="checks"></div>
+        </article>
+      </div>
+      <details class="more">
+        <summary>자세히: 판단 과정</summary>
+        <article class="card"><ol class="trace" id="trace"></ol></article>
+      </details>
+    </section>
+
+    <!-- 6. 조치 -->
+    <section class="block" id="s-action" aria-labelledby="h-action">
+      <header class="block-head">
+        <span class="step">6</span>
+        <div><h2 id="h-action">무엇을 해야 하나</h2><p>유력 원인에 맞는 조치를 제시하고, 엔지니어 판정을 재학습 데이터로 남깁니다.</p></div>
+      </header>
+      <div class="grid g-action">
+        <article class="card">
+          <div class="card-head"><h3>권장 조치</h3></div>
+          <div id="action-body"></div>
+        </article>
+        <article class="card">
+          <div class="card-head"><h3>엔지니어 판정</h3><span class="muted" id="fb-count"></span></div>
+          <div class="fb-actions">
+            <button type="button" class="btn primary" id="fb-confirm">AI 판정 확정</button>
+            <button type="button" class="btn ghost" id="fb-toggle">판정 수정</button>
+          </div>
+          <form id="fb-form" hidden>
+            <fieldset><legend>실제 패턴</legend><div id="fb-labels" class="checks"></div></fieldset>
+            <label class="field wide"><span>실제 원인</span><select id="fb-cause"></select></label>
+            <label class="field wide"><span>메모</span><textarea id="fb-note" rows="2" maxlength="500"></textarea></label>
+            <button type="submit" class="btn primary">수정 판정 저장</button>
+          </form>
+          <p class="note" id="fb-msg">확정하거나 수정한 판정은 재학습 라벨 후보로 저장됩니다.</p>
+        </article>
+      </div>
+      <details class="more">
+        <summary>자세히: 수율 · 레시피 파라미터</summary>
+        <div class="grid g-more">
+          <article class="card">
+            <div class="card-head"><h3>수율</h3></div>
+            <div id="yield-body"></div>
+          </article>
+          <article class="card span2">
+            <div class="card-head"><h3>레시피 파라미터</h3><span class="muted">유력 원인과 연결된 항목을 강조합니다</span></div>
+            <div class="recipe" id="recipe"></div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <!-- 팀용: 실물 검증 기록 · 모델 구성 (접힘) -->
+    <section class="block last" aria-label="팀 도구">
+      <details class="panel" id="s-truth">
+        <summary>실물 검증 기록</summary>
+        <p class="note">이 웨이퍼에 직접 넣은 결함을 적으면 검출 결과와 다이 단위로 비교합니다. 기록은 스캔 폴더에 남아 이후 실물 학습·검증 데이터가 됩니다.</p>
+        <div class="truth-form">
+          <label class="field"><span>검증 단계</span>
+            <select id="truth-stage"><option value="1">1단계 단일 결함</option><option value="2">2단계 대표 패턴</option><option value="3">3단계 복합 패턴</option></select>
+          </label>
+          <label class="field"><span>파티클 다이</span><input id="truth-particle" inputmode="numeric" placeholder="예: 3, 6, 14"></label>
+          <label class="field"><span>스크래치 다이</span><input id="truth-scratch" inputmode="numeric" placeholder="예: 20, 21"></label>
+          <label class="field"><span>스테인 다이</span><input id="truth-stain" inputmode="numeric" placeholder="예: 33"></label>
+          <fieldset class="truth-patterns"><legend>의도한 패턴</legend><div id="truth-patterns"></div></fieldset>
+          <label class="field truth-note"><span>메모</span><input id="truth-note" placeholder="그린 방법, 크기 등"></label>
+          <button class="btn primary" id="truth-save" type="button">기록 저장</button>
+        </div>
+        <p class="note" id="truth-result" role="status"></p>
+      </details>
+      <details class="panel modelinfo">
+        <summary>모델 구성</summary>
+        <table>
+          <thead><tr><th scope="col">단계</th><th scope="col">현재 구성</th><th scope="col">교체 계획</th><th scope="col">상태</th></tr></thead>
+          <tbody id="engine-rows"></tbody>
+        </table>
+        <p class="note">분류기와 검출기는 인터페이스로 분리되어 있어, 모델을 바꿔도 화면과 XAI 코드는 그대로 씁니다.</p>
+      </details>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/wafer_view.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scan_progress.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scan.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/adc.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/truth.js') }}"></script>
+</body>
+</html>

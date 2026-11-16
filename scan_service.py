@@ -47,7 +47,6 @@ AE_STEPS = 4
 AE_SETTLE_S = 0.8      # 노출을 바꾼 뒤 센서가 따라오는 시간
 AE_MIN, AE_MAX = 5, 300
 EDGE_CLAMP_MM = 16.0   # 허용 범위를 이만큼(다이 반 칸)까지 벗어난 다이는 범위 끝에서 찍는다. 실제 촬영 위치는 manifest pos 에 남는다
-LIGHT_CAP_EXPOSURE = 150   # 이 카메라는 노출 약 150 이상에서 밝기가 거의 늘지 않는다 (조명 점검 기준)
 
 
 class JobError(Exception):
@@ -336,10 +335,6 @@ class ScanService:
             self.job["message"] = "완료"
         self._run("goto", fn)
 
-    def goto_wafer_center(self):
-        cfg = scan_config.load()
-        self.goto(float(cfg["wafer_center_x"]), float(cfg["wafer_center_y"]), "웨이퍼 중심")
-
     def set_origin_here(self) -> dict:
         """손으로 갠트리를 웨이퍼 정중앙에 둔 뒤 누른다: 지금 위치를 갠트리 원점이자 웨이퍼 중심 (0, 0) 으로 한다.
         모터에는 위치 센서가 없어 손으로 옮긴 것을 모른다. 이 버튼 없이 스캔하면 마지막 기록 위치 기준으로 움직여
@@ -350,12 +345,6 @@ class ScanService:
         st["x_mm"], st["y_mm"] = 0.0, 0.0
         gcli.save_state(st)
         return scan_config.update(wafer_center_x=0.0, wafer_center_y=0.0)
-
-    def set_wafer_center_here(self) -> dict:
-        if self.job["busy"]:
-            raise JobError("작업 중에는 바꿀 수 없습니다.")
-        st = self._state()
-        return scan_config.update(wafer_center_x=round(st["x_mm"], 2), wafer_center_y=round(st["y_mm"], 2))
 
     # ── 촬영 ───────────────────────────────────────────────────────
     def _snap(self, out_dir, stem, cfg, dwell):
@@ -378,34 +367,6 @@ class ScanService:
         d = os.path.join(SCAN_ROOT, f"{datetime.now():%Y%m%d_%H%M%S}_{kind}")
         os.makedirs(d, exist_ok=True)
         return d
-
-    def preview_bounds(self):
-        """스캔 영역 네 모서리(다이 바깥 경계)를 돌며 한 장씩 찍고 웨이퍼 중심으로 복귀.
-        검정 테이프로 표시한 스캔 범위가 각 모서리 사진에 맞게 보이는지 확인하는 용도."""
-        plan = self.plan()
-        bad = [c["name"] for c in plan["corners"] if not c["in_limits"]]
-        if bad:
-            raise JobError(f"모서리 {', '.join(bad)} 가 갠트리 범위 밖입니다. 웨이퍼 중심 설정을 확인하세요.")
-
-        def fn(g, st, cfg):
-            prof = self._profile(st, cfg)
-            out = self._new_dir("bounds")
-            self.scan.update(dir=out, preview=[], results=[])
-            self.job["total"] = len(plan["corners"])
-            for i, c in enumerate(plan["corners"], 1):
-                if self._stop:
-                    return
-                self.job.update(message=f"범위 확인: {c['name']} 모서리 ({c['gx']:+.0f}, {c['gy']:+.0f})", progress=i - 1)
-                if not self._move(g, st, prof, c["gx"], c["gy"]):
-                    return
-                full, thumb = self._snap(out, f"corner_{i}", cfg, max(1.0, float(cfg["dwell_s"])))
-                self.scan["preview"].append({"name": c["name"], "file": full, "thumb": thumb,
-                                             "gx": c["gx"], "gy": c["gy"]})
-                self.job["progress"] = i
-            self.job["message"] = "웨이퍼 중심으로 복귀"
-            self._move(g, st, prof, float(cfg["wafer_center_x"]), float(cfg["wafer_center_y"]))
-            self.job["message"] = "범위 확인 완료"
-        self._run("bounds", fn, total=4)
 
     def start_scan(self):
         """원클릭 스캔: 웨이퍼 중심 → 44개 다이를 지그재그로 돌며 정지·촬영 → 웨이퍼 중심 복귀."""
@@ -534,98 +495,3 @@ class ScanService:
             self.job["message"] = "웨이퍼 맵 합성·결함 검출 완료"
         self._run("map", fn, motion=False)
 
-    def check_light(self) -> dict:
-        """조명 점검: 갠트리를 움직이지 않고 지금 위치에서 촬영 노출 자동 맞춤을 돌려 조명이 알맞은지 알려 준다.
-        자동 노출이 카메라 한계까지 올라가도 어두우면 조명이 부족한 것이다 (이 카메라는 노출 약 150 이상에서
-        밝기가 거의 늘지 않는다)."""
-        if self.job["busy"]:
-            raise JobError("작업 중에는 점검할 수 없습니다.")
-        cfg = scan_config.load()
-        start = int(cfg.get("scan_exposure") or 25)
-        try:
-            e = self._auto_exposure(start)
-            frame = self.camera.wait_new_frame(self.camera.frame_id(), timeout=2.0)
-        finally:
-            self.camera.set_exposure(cfg["exposure"])           # 화면은 미리보기 밝기로
-            self.job["message"] = "대기 중"
-        if frame is None:
-            raise JobError("카메라 프레임을 받지 못했습니다.")
-        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        level = float(np.median(cv2.resize(g, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)))
-        sat = float((g >= 245).mean() * 100)
-        geo = self._camera_geometry(g, cfg)
-        if e >= LIGHT_CAP_EXPOSURE and level < AE_TARGET - AE_TOLERANCE:
-            verdict, advice = "dark", f"조명이 부족합니다. 지금보다 {AE_TARGET / max(level, 1):.1f}배 이상 밝게 한 뒤 다시 점검하세요."
-        elif e >= LIGHT_CAP_EXPOSURE:
-            verdict, advice = "low", "밝기는 맞췄지만 노출이 한계에 가깝습니다. 조명을 조금 더 올리면 잡음이 줄어듭니다."
-        else:
-            verdict, advice = "ok", "알맞습니다. 이 조명으로 스캔하세요."
-        return {"exposure": e, "level": round(level), "target": AE_TARGET, "saturated_pct": round(sat, 1),
-                "verdict": verdict, "advice": advice, **geo}
-
-    @staticmethod
-    def _frame_pitch(g: np.ndarray) -> float | None:
-        """사진 한 장의 격자 한 칸 간격(px). 가운데는 조명 반사, 가장자리는 어안 왜곡이 커서
-        가운데 위·아래 띠와 좌·우 띠에서 선 간격을 재 평균한다. 높이 변화 전후를 비교하는 용도다."""
-        g = g.astype(np.float32)
-        h, w = g.shape
-        g[g > 230] = float(np.median(g))
-        def spacing(profile):
-            p = cv2.GaussianBlur(profile.reshape(1, -1), (0, 0), 3).ravel()
-            p = p - cv2.GaussianBlur(p.reshape(1, -1), (0, 0), 30).ravel()
-            th = np.percentile(p, 97)
-            peaks = [i for i in range(4, len(p) - 4) if p[i] > th and p[i] == p[i - 4:i + 5].max()]
-            gaps = np.diff(peaks)
-            gaps = gaps[gaps > 80]
-            return float(np.median(gaps)) if len(gaps) else None
-        vals = [spacing(g[y0:y0 + 120, w // 2 - 660:w // 2 + 660].mean(0)) for y0 in (int(h * 0.15), int(h * 0.75))]
-        vals += [spacing(g[h // 2 - 400:h // 2 + 400, x0:x0 + 120].mean(1)) for x0 in (int(w * 0.18), int(w * 0.75))]
-        vals = [v for v in vals if v]
-        return float(np.mean(vals)) if vals else None
-
-    def _camera_geometry(self, g: np.ndarray, cfg: dict) -> dict:
-        """카메라 높이 점검: 격자 간격과 선명도를 처음 잰 값(기준)과 비교해 새 축척을 계산하고 맵 합성 기준으로 저장한다."""
-        pitch = self._frame_pitch(g)
-        sharp = float(cv2.Laplacian(cv2.GaussianBlur(g.astype(np.float32), (0, 0), 1), cv2.CV_32F).var())
-        out = {"pitch_px": round(pitch, 1) if pitch else None, "sharpness": round(sharp, 1)}
-        if not pitch:
-            out["geometry"] = "사진에서 격자선을 찾지 못해 높이를 재지 못했습니다."
-            return out
-        ref_pitch, ref_scale = cfg.get("camera_ref_pitch_px"), cfg.get("camera_ref_scale")
-        if not ref_pitch or not ref_scale:
-            m = wafer_stitch.latest_map(SCAN_ROOT)
-            if not (m and m.get("camera")):
-                out["geometry"] = "기준으로 삼을 맵이 없습니다. 스캔을 한 번 한 뒤 다시 점검하세요."
-                return out
-            scan_config.update(camera_ref_pitch_px=round(pitch, 1), camera_ref_scale=m["camera"]["px_per_mm_full"],
-                               camera_ref_sharpness=round(sharp, 1), camera_scale_hint=None)
-            out["geometry"] = f"지금 카메라 높이를 기준으로 저장했습니다 (격자 한 칸 {pitch:.0f} px)."
-            return out
-        ratio = pitch / float(ref_pitch)
-        if abs(ratio - 1) < 0.03:
-            scan_config.update(camera_scale_hint=None)
-            out["geometry"] = "카메라 높이가 기준과 같습니다."
-        else:
-            hint = float(ref_scale) * ratio
-            scan_config.update(camera_scale_hint=round(hint, 3))
-            out["geometry"] = (f"카메라가 기준보다 {'가까워져' if ratio > 1 else '멀어져'} 영상이 {ratio:.2f}배입니다. "
-                               f"맵 합성 축척을 {hint:.2f} px/mm 로 맞췄습니다.")
-            fov_short = 1080 / hint
-            if fov_short < 60:
-                out["geometry"] += f" 시야가 짧은 쪽 {fov_short:.0f} mm 로 좁아 스캔 사진끼리 겹침이 부족할 수 있습니다."
-        ref_sharp = cfg.get("camera_ref_sharpness")
-        if ref_sharp and sharp < 0.7 * float(ref_sharp):
-            out["geometry"] += " 사진이 기준보다 흐립니다. 고정 초점 렌즈라 초점이 맞는 높이로 조정하세요."
-        out["ratio"] = round(ratio, 3)
-        return out
-
-    def apply_alignment(self) -> dict:
-        """맵에서 측정한 웨이퍼 중심·반지름을 스캔 설정에 적용한다. 다음 스캔은 웨이퍼 전체를 덮는다."""
-        if self.job["busy"]:
-            raise JobError("작업 중에는 바꿀 수 없습니다.")
-        m = self.latest_map()
-        w = (m or {}).get("wafer")
-        if not w:
-            raise JobError("맵에서 웨이퍼 외곽을 찾지 못해 정렬할 수 없습니다.")
-        cx, cy = w["center_gantry_mm"]
-        return scan_config.update(wafer_center_x=cx, wafer_center_y=cy, map_radius_mm=w["radius_gantry_mm"])

@@ -11,8 +11,7 @@
   let S = null;
   let mode = "status";
   let selected = null;
-  let imgToken = 0;
-  let inputMode = null;      // real | sim. 맵이 있으면 처음에는 실측 맵을 보여 준다
+  let inputMode = "real";    // real | result
 
   async function api(url, body) {
     const opt = body === undefined ? {} : {
@@ -63,23 +62,21 @@
   }
 
   function renderHeader() {
-    const sp = S.spec;
-    $("spec-line").textContent = `${sp.diameter_mm} mm · ${sp.die_count}다이 · 피치 ${sp.pitch_mm} mm · ADC + XAI 공정 피드백`;
     const sel = $("scenario");
-    const opts = (S.scans.length ? `<optgroup label="실측 스캔">${S.scans.map((c) => `<option value="scan:${esc(c.id)}">${esc(c.name)}</option>`).join("")}</optgroup>` : "") +
-      `<optgroup label="시뮬레이션">${S.scenarios.map((c) => `<option value="sim:${esc(c.id)}">${esc(c.name)}</option>`).join("")}</optgroup>`;
+    const opts = S.scans.length
+      ? S.scans.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")
+      : '<option value="">스캔 기록 없음</option>';
     if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; }
     const ss = S.session;
-    sel.value = ss.source === "scan" ? `scan:${ss.scan_id}` : `sim:${ss.scenario}`;
+    const scan = ss.source === "scan";
+    if (scan) sel.value = ss.scan_id;
     for (const [k, e] of Object.entries(S.engines)) {
       $(`eng-${k}`).textContent = e.now;
     }
     const edited = ss.edited ? " · 엔지니어가 다이를 수정한 상태" : "";
-    const bar = $("simbar");
-    bar.classList.toggle("live", ss.source === "scan");
-    bar.textContent = ss.source === "scan"
-      ? `실측 스캔 입력: ${ss.scan_name} · 검사 다이 ${ss.inspected}/${S.spec.die_count} · 검출 ${ss.found}건${edited}. 패턴 판정은 ${S.model.name}입니다.`
-      : `시뮬레이션 입력: ${ss.scenario_name} (${ss.scenario_note})${edited}. 검출은 시뮬레이션, 분류는 규칙 기반입니다.`;
+    $("simbar").textContent = scan
+      ? `${ss.scan_name} · 검사 다이 ${ss.inspected}/${S.spec.die_count} · 검출 ${ss.found}건${edited} · 패턴 판정 ${S.model.name}`
+      : "스캔 기록이 없습니다. 위에서 웨이퍼 스캔을 시작하세요.";
   }
 
   function renderVerdict() {
@@ -109,71 +106,32 @@
     $("verdict-line").textContent = S.conclusion;
   }
 
-  // ── 입력 이미지 ──────────────────────────────────────────────
+  // ── 웨이퍼 맵 사진 (실측 / 결과) ─────────────────────────────
   function renderInput() {
-    const usable = !!(S.wafer_map && S.wafer_map.wafer);
     const scan = S.session.source === "scan";
-    const hasResult = !!(scan && S.wafer_map && S.wafer_map.result && S.wafer_map.result.wafer);
-    if (scan && usable && inputMode !== "result") inputMode = "real";
-    if (inputMode === "result" && !hasResult) inputMode = "real";
-    if (inputMode === null || (inputMode === "real" && !usable)) inputMode = usable ? "real" : "sim";
-    const real = inputMode === "real" || inputMode === "result";
-    // 결과 화면: 순정 웨이퍼 템플릿 좌표의 이미지라 템플릿 맵 정보로 그린다 (검출 표시·격자도 그 좌표로)
+    const usable = !!(scan && S.wafer_map && S.wafer_map.wafer);
+    const hasResult = !!(usable && S.wafer_map.result && S.wafer_map.result.wafer);
+    if (inputMode !== "result" || !hasResult) inputMode = "real";
+    // 결과 화면은 순정 웨이퍼 템플릿 좌표의 이미지라 템플릿 맵 정보로 그린다 (검출 표시·격자도 그 좌표로)
     const map = inputMode === "result" ? S.wafer_map.result : S.wafer_map;
     document.querySelectorAll("#input-modes button").forEach((b) => {
       b.classList.toggle("on", b.dataset.v === inputMode);
-      b.disabled = (b.dataset.v === "real" && !usable) || (b.dataset.v === "sim" && scan) ||
-        (b.dataset.v === "result" && !hasResult);
+      b.disabled = !usable || (b.dataset.v === "result" && !hasResult);
       if (b.dataset.v === "result") b.hidden = !hasResult;
     });
-    $("input-title").textContent = inputMode === "result" ? "결과 (순정 템플릿 + 검출 결함)" : real ? "웨이퍼 맵" : "입력 이미지";
-    $("real-view").hidden = !real;
-    $("input-img").hidden = real;
-    $("input-overlay").style.display = real ? "none" : "";
-    $("overlay-wrap").hidden = real && !scan;
-    $("grid-wrap").hidden = !real;
-    if (real) {
-      const marks = scan && $("show-overlay").checked ? S.found.map((f) => ({
-        x_mm: f.x_mm, y_mm: f.y_mm, r_mm: Math.max(2.5, Math.sqrt(f.area_mm2 / Math.PI) + 1.5),
-        color: css(TYPE_COLOR[f.type]), title: `다이 ${f.die} · ${S.types[f.type].ko} · ${f.area_mm2} mm²`,
-      })) : null;
-      WaferView.draw($("real-view"), map, { grid: $("show-grid").checked, selected: selected, marks, pitchMm: S.spec.pitch_mm });
-      const cov = S.wafer_map.coverage_pct;
-      if (scan) {
-        const by = Object.values(S.types).filter((t) => t.count).map((t) => `${t.ko} ${t.count}`).join(" · ") || "결함 없음";
-        $("input-note").textContent = inputMode === "result"
-          ? `순정 웨이퍼(${map.dir}) 위에 검출 결함 ${S.found.length}건의 실제 모습을 붙인 결과 · 놓친 결함은 '실측 맵'에서 확인하세요`
-          : `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${cov}% · 기준 다이 비교로 검출 ${S.found.length}건 (${by})`;
-      } else {
-        $("input-note").textContent = `촬영 ${map.images}장을 한 장으로 합성 · 웨이퍼 커버리지 ${cov}%` +
-          (cov < 98 ? ". 스캔 콘솔에서 정렬 후 재스캔하면 전체를 담습니다." : "");
-      }
-      return;
-    }
-    const img = $("input-img");
-    const token = ++imgToken;
-    const next = new Image();
-    next.onload = () => { if (token === imgToken) img.src = next.src; };
-    next.src = `/api/adc/input.jpg?t=${Date.now()}`;
-
-    const ov = $("input-overlay");
-    const show = $("show-overlay").checked;
-    let html = "";
-    if (show) {
-      for (const d of S.detections) {
-        const color = css(TYPE_COLOR[d.type]);
-        if (d.shape === "polygon") {
-          const path = d.polygons.map((p) => `M${p.points.map((q) => q.join(",")).join("L")}Z`).join("");
-          html += `<path d="${path}" fill="${color}" fill-opacity=".22" fill-rule="evenodd" stroke="${color}" stroke-width="3"/>`;
-        } else {
-          const [x, y, w, h] = d.bbox;
-          html += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
-        }
-      }
-    }
-    ov.innerHTML = html;
-    const counts = Object.values(S.types).filter((t) => t.count).map((t) => `${t.ko} ${t.dies}다이`);
-    $("input-note").textContent = `검출 분포로 만든 시뮬레이션 이미지입니다${counts.length ? ` · ${counts.join(", ")}` : ""}.`;
+    $("input-title").textContent = inputMode === "result" ? "결과 (순정 템플릿 + 검출 결함)" : "웨이퍼 맵";
+    $("map-empty").hidden = usable;
+    $("real-view").hidden = !usable;
+    if (!usable) { $("real-view").innerHTML = ""; $("input-note").textContent = ""; return; }
+    const marks = $("show-overlay").checked ? S.found.map((f) => ({
+      x_mm: f.x_mm, y_mm: f.y_mm, r_mm: Math.max(2.5, Math.sqrt(f.area_mm2 / Math.PI) + 1.5),
+      color: css(TYPE_COLOR[f.type]), title: `다이 ${f.die} · ${S.types[f.type].ko} · ${f.area_mm2} mm²`,
+    })) : null;
+    WaferView.draw($("real-view"), map, { grid: $("show-grid").checked, selected: selected, marks, pitchMm: S.spec.pitch_mm });
+    const by = Object.values(S.types).filter((t) => t.count).map((t) => `${t.ko} ${t.count}`).join(" · ") || "결함 없음";
+    $("input-note").textContent = inputMode === "result"
+      ? `순정 웨이퍼(${map.dir}) 위에 검출 결함 ${S.found.length}건의 실제 모습을 붙인 결과 · 놓친 결함은 '실측 맵'에서 확인하세요`
+      : `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${S.wafer_map.coverage_pct}% · 기준 다이 비교로 검출 ${S.found.length}건 (${by})`;
   }
 
   // ── 웨이퍼 맵 ────────────────────────────────────────────────
@@ -262,7 +220,7 @@
     const counts = Object.entries(d.counts).filter(([, v]) => v).map(([k, v]) => `${S.types[k].ko} ${v}`).join(", ") || "없음";
     const dose = (t, n, label) => `<button type="button" class="btn" data-edit="${t}" data-n="${n}">${label}</button>`;
     body.innerHTML = `
-      ${canCrop ? `<canvas class="die-photo" id="die-crop" width="320" height="320" role="img" aria-label="합성 맵의 다이 ${d.id} 위치"></canvas><p class="note photo-note">합성 맵의 이 다이 위치 (아래 결함은 ${S.session.edited ? "수정된 " : ""}${S.session.source === "scan" ? "검출 결과" : "시뮬레이션 입력값"})</p>` : ""}
+      ${canCrop ? `<canvas class="die-photo" id="die-crop" width="320" height="320" role="img" aria-label="합성 맵의 다이 ${d.id} 위치"></canvas><p class="note photo-note">합성 맵의 이 다이 위치 (아래 결함은 ${S.session.edited ? "수정된 " : ""}검출 결과)</p>` : ""}
       <dl class="facts">
         <dt>다이</dt><dd>${d.id}번 (행 ${d.row + 1}, 열 ${d.col + 1})</dd>
         <dt>위치</dt><dd>${d.x_mm}, ${d.y_mm} mm</dd>
@@ -485,9 +443,9 @@
 
   // ── 이벤트 ───────────────────────────────────────────────────
   $("scenario").onchange = (e) => {
+    if (!e.target.value) return;
     selected = null;
-    const [kind, id] = e.target.value.split(/:(.*)/s);
-    act(kind === "scan" ? "/api/adc/scan" : "/api/adc/scenario", { id });
+    act("/api/adc/scan", { id: e.target.value });
   };
   $("map-modes").onclick = (e) => {
     const b = e.target.closest("button");
@@ -545,42 +503,26 @@
   };
 
   // ── 새 스캔 감시 ─────────────────────────────────────────────
-  // 스캔은 촬영 뒤 맵 합성·검출까지 1분 남짓 더 걸린다. 진행을 알리고, 끝나면 새 결과를 불러온다.
+  // 진행 표시는 위 스캔 구역(scan.js)이 맡고, 여기서는 새 맵이 생기면 결과를 불러오기만 한다
   let newest = null;          // 이 화면이 이미 알고 있는 가장 새 맵
-  let shownUntil = 0;         // 완료 표시를 잠시 남겨 둘 시각
   async function watchScan() {
     if (!S) return;
+    let busy = false;
     try {
       const st = await (await fetch("/api/scan/status", { cache: "no-store" })).json();
-      const j = st.job, m = st.wafer_map;
+      const m = st.wafer_map;
+      busy = st.job.busy;
       newest ??= S.scans[0]?.id ?? null;
-      let loaded = false;
-      if (!j.busy && m?.wafer && m.dir !== newest && m.dir > (newest || "")) {
+      if (!busy && m?.wafer && m.dir !== newest && m.dir > (newest || "")) {
         newest = m.dir;
-        if (S.session.source === "scan" && !S.session.edited && !S.belief.answered.length) {
+        if (!S.session.edited && !S.belief.answered.length) {
           selected = null;
           await act("/api/adc/scan", { id: m.dir });
-          loaded = true;
-          shownUntil = Date.now() + 15000;
         }
       }
-      const recent = j.finished && Date.now() - new Date(j.finished).getTime() < 120000;   // 끝난 지 2분 이내
-      const flowJob = j.phases?.length && (j.busy || Date.now() < shownUntil || (recent && j.result && j.result !== S.session.scan_id));
-      let html = "";
-      if (flowJob) {
-        const pending = !j.busy && j.result && j.result !== S.session.scan_id;
-        html = ScanProgress.html(j, { resultHref: pending ? `/analysis?scan=${encodeURIComponent(j.result)}` : null });
-        if (!j.busy && !pending) html = html.replace("결과 준비 완료", "결과 준비 완료 · 화면을 새 스캔으로 바꿨습니다");
-      }
-      const box = $("scan-flow");
-      if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
-      box.hidden = !html;
-      clearTimeout(watchTimer);
-      watchTimer = setTimeout(watchScan, j.busy || loaded ? 1000 : 3000);
-    } catch (e) {
-      clearTimeout(watchTimer);
-      watchTimer = setTimeout(watchScan, 3000);   // 스캔 콘솔이 없어도 대시보드는 동작한다
-    }
+    } catch (e) { /* 다음 확인에서 다시 시도 */ }
+    clearTimeout(watchTimer);
+    watchTimer = setTimeout(watchScan, busy ? 1500 : 3000);
   }
   let watchTimer = null;
   watchTimer = setTimeout(watchScan, 1000);
@@ -591,7 +533,7 @@
       const want = new URLSearchParams(location.search).get("scan");
       const latest = S.scans[0]?.id;
       if (want && want !== S.session.scan_id) S = await api("/api/adc/scan", { id: want });
-      else if (!want && S.session.source === "scan" && latest && latest !== S.session.scan_id) S = await api("/api/adc/scan", { id: latest });
+      else if (!want && latest && (S.session.source !== "scan" || latest !== S.session.scan_id)) S = await api("/api/adc/scan", { id: latest });
       render();
     } catch (e) {
       $("errbar").textContent = `상태를 불러오지 못했습니다: ${e.message}`;

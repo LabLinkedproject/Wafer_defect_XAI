@@ -1,7 +1,7 @@
 """ADC + XAI 대시보드 API."""
 from __future__ import annotations
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, jsonify, request
 
 from . import truth
 from .knowledge import PATTERNS
@@ -20,18 +20,6 @@ def create_adc_blueprint() -> Blueprint:
 
     @bp.route("/api/adc/state")
     def state():
-        return jsonify(s.state())
-
-    @bp.route("/api/adc/input.jpg")
-    def input_image():
-        return Response(s.input_image(), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
-
-    @bp.route("/api/adc/scenario", methods=["POST"])
-    def scenario():
-        try:
-            s.load_scenario(body().get("id", ""))
-        except KeyError:
-            return bad("알 수 없는 시나리오")
         return jsonify(s.state())
 
     @bp.route("/api/adc/scan", methods=["POST"])

@@ -5,7 +5,7 @@ scan_routes.py
 from __future__ import annotations
 import os
 
-from flask import Blueprint, jsonify, render_template, request, send_from_directory
+from flask import Blueprint, jsonify, request, send_from_directory
 
 import scan_config
 from scan_service import ScanService, JobError, SCAN_ROOT
@@ -27,10 +27,6 @@ def create_scan_blueprint(camera) -> Blueprint:
             return ok(result=res)
         except JobError as e:
             return fail(str(e), 409)
-
-    @bp.route("/scan")
-    def scan_page():
-        return render_template("scan.html")
 
     @bp.route("/api/scan/status")
     def status():
@@ -68,22 +64,10 @@ def create_scan_blueprint(camera) -> Blueprint:
     def set_origin():
         return call(svc.set_origin_here)
 
-    @bp.route("/api/gantry/wafer-center", methods=["POST"])
-    def wafer_center():
-        return call(svc.goto_wafer_center)
-
     @bp.route("/api/gantry/stop", methods=["POST"])
     def stop():
         svc.stop()
         return ok()
-
-    @bp.route("/api/scan/set-center", methods=["POST"])
-    def set_center():
-        return call(svc.set_wafer_center_here)
-
-    @bp.route("/api/scan/bounds", methods=["POST"])
-    def bounds():
-        return call(svc.preview_bounds)
 
     @bp.route("/api/scan/start", methods=["POST"])
     def start():
@@ -93,35 +77,15 @@ def create_scan_blueprint(camera) -> Blueprint:
     def build_map():
         return call(svc.build_latest_map)
 
-    @bp.route("/api/scan/light", methods=["POST"])
-    def light():
-        try:
-            return ok(result=svc.check_light())
-        except JobError as e:
-            return fail(str(e))
-
-    @bp.route("/api/scan/align", methods=["POST"])
-    def align():
-        return call(svc.apply_alignment)
-
     @bp.route("/api/scan/map")
     def get_map():
         return jsonify(svc.latest_map() or {})
 
     @bp.route("/api/scan/config", methods=["POST"])
-    def config():
+    def config():  # 화면에서는 노출만 바꾼다. 나머지 설정은 scan_config.json 파일로.
         d = request.get_json(silent=True) or {}
         changes = {}
         try:
-            if "rpm" in d:
-                changes["rpm"] = max(10.0, min(240.0, float(d["rpm"])))
-            if "dwell_s" in d:
-                changes["dwell_s"] = max(0.0, min(5.0, float(d["dwell_s"])))
-            if "pitch_mm" in d:
-                changes["pitch_mm"] = None if d["pitch_mm"] in (None, "") else max(5.0, min(60.0, float(d["pitch_mm"])))
-            for k in ("wafer_sign_x", "wafer_sign_y"):
-                if k in d:
-                    changes[k] = -1 if int(d[k]) < 0 else 1
             for k in ("exposure", "scan_exposure"):
                 if k in d:
                     changes[k] = None if d[k] in (None, "", "auto") else max(1, min(5000, int(d[k])))

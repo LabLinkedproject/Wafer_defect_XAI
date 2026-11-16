@@ -1,14 +1,11 @@
 """
 adc/render.py
-검출 결과에 맞는 웨이퍼 입력 이미지를 합성하고, 결함을 유형별 표현으로 변환한다.
+결함을 유형별 표현으로 변환한다.
     stain            : 연속 면적 결함 → 다이 합집합 폴리곤 (도넛의 구멍 포함)
     particle/scratch : 다이별 박스
-
-합성 이미지는 시연용이다. 실제 촬영본은 /scan 의 스캔 결과를 쓴다.
 """
 from __future__ import annotations
 import math
-import random
 
 import cv2
 import numpy as np
@@ -98,59 +95,3 @@ def detect_regions(dies, defects, pitch, diameter):
                             "bbox": [x + pad, y + pad, side - 2 * pad, side - 2 * pad]})
     return out, metrics
 
-
-def render_input(dies, defects, pitch, diameter) -> bytes:
-    """결함 분포를 반영한 합성 웨이퍼 이미지 (JPEG)."""
-    s = px_per_mm(diameter)
-    rng = random.Random(7)
-    np_rng = np.random.default_rng(7)
-    c = IMAGE_SIZE // 2
-    R = int(diameter / 2 * s)
-    by_id = {d["id"]: d for d in dies}
-
-    img = np.full((IMAGE_SIZE, IMAGE_SIZE, 3), 22, np.uint8)
-    yy, xx = np.mgrid[0:IMAGE_SIZE, 0:IMAGE_SIZE]
-    rr = np.hypot(xx - c, yy - c) / R
-    shade = 172 - 34 * rr + 16 * np.sin((xx + yy) / 150)
-    body = np.dstack([shade + 8, shade + 2, shade - 6]).clip(0, 255).astype(np.uint8)
-    disk = rr <= 1
-    img[disk] = body[disk]
-
-    for d in dies:
-        x, y, side = _die_rect(d, pitch, s)
-        cv2.rectangle(img, (x + 1, y + 1), (x + side - 1, y + side - 1), (205, 200, 192), -1)
-        cv2.rectangle(img, (x, y), (x + side, y + side), (92, 92, 96), 1)
-
-    stain_dies = [by_id[i] for i, k in defects.items() if k.get("stain", 0) > 0]
-    if stain_dies:
-        soft = cv2.GaussianBlur(_stain_mask(stain_dies, pitch, s), (31, 31), 0).astype(float) / 255
-        tint = np.array([42, 72, 104], float)
-        img = (img * (1 - 0.72 * soft[..., None]) + tint * 0.72 * soft[..., None]).astype(np.uint8)
-
-    for i, k in defects.items():
-        d = by_id[i]
-        x, y, side = _die_rect(d, pitch, s)
-        for _ in range(k.get("particle", 0) * 5):
-            p = (x + rng.randint(5, side - 5), y + rng.randint(5, side - 5))
-            cv2.circle(img, p, rng.choice((1, 2, 2)), (30, 34, 40), -1, cv2.LINE_AA)
-
-    # 스크래치는 다이마다 끊지 않고 결함 다이를 잇는 한 줄로 그린다
-    pts = np.array([to_px(by_id[i]["x_mm"], by_id[i]["y_mm"], s) for i, k in defects.items()
-                    if k.get("scratch", 0) > 0], float)
-    if len(pts) >= 2:
-        mean = pts.mean(0)
-        axis = np.linalg.eigh(np.cov((pts - mean).T))[1][:, 1]
-        t = (pts - mean) @ axis
-        half = pitch * s * 0.45
-        ends = mean + np.outer([t.min() - half, t.max() + half], axis)
-        p1, p2 = tuple(ends[0].astype(int).tolist()), tuple(ends[1].astype(int).tolist())
-        cv2.line(img, p1, p2, (40, 44, 52), 4, cv2.LINE_AA)
-        cv2.line(img, p1, p2, (250, 248, 244), 2, cv2.LINE_AA)
-
-    noise = np_rng.normal(0, 3, img.shape)
-    img = (img.astype(float) + noise).clip(0, 255).astype(np.uint8)
-    cv2.circle(img, (c, c), R, (70, 72, 78), 2, cv2.LINE_AA)
-    notch = np.array([[c - 8, c + R + 1], [c + 8, c + R + 1], [c, c + R - 9]], np.int32)
-    cv2.fillPoly(img, [notch], (22, 22, 22), cv2.LINE_AA)
-    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 88])
-    return buf.tobytes()

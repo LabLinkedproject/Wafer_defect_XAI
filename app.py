@@ -170,23 +170,24 @@ def _shrink(frame, width):
 
 
 camera = CameraManager()
-app.register_blueprint(create_scan_blueprint(camera))   # /scan 콘솔 + 갠트리·촬영 API
-app.register_blueprint(create_adc_blueprint())          # /analysis 대시보드 API
+app.register_blueprint(create_scan_blueprint(camera))   # 갠트리·촬영 API
+app.register_blueprint(create_adc_blueprint())          # 판정·XAI API
 
 
 @app.route("/")
 def index():
-    return redirect("/scan")
+    return render_template("index.html")
+
+
+@app.route("/scan")
+@app.route("/analysis")
+def old_pages():
+    return redirect("/")
 
 
 @app.route("/video_feed")
 def video_feed():
     return Response(camera.stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.route("/analysis")
-def analysis_page():
-    return render_template("analysis.html")
 
 
 if __name__ == "__main__":
