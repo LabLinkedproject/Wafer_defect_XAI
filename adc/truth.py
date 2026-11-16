@@ -88,3 +88,78 @@ def compare(scan_id: str, truth: dict | None = None) -> dict | None:
     type_ok = sorted(d for d in tp if want[d] & found[d])
     return {"tp": tp, "fn": fn, "fp": fp, "tn": tn, "type_match": type_ok,
             "not_inspected": sorted(d for d in want if d not in inspected)}
+
+
+# ── 단계별 집계 ─────────────────────────────────────────────────
+TARGET = {1: 20, 2: 3, 3: 2}     # 1단계: 종류당 결함 다이 수, 2단계: 패턴당 스캔 수, 3단계: 조합당 스캔 수
+
+
+def _bound(errors: int, n: int) -> str:
+    """오류가 0 이면 3/n 규칙(95 %)으로 상한을 말한다. 그 밖에는 비율만."""
+    if n == 0:
+        return "표본 없음"
+    if errors == 0:
+        return f"0/{n} → 95 % 신뢰로 {3 / n * 100:.0f} % 이하"
+    return f"{errors}/{n} = {errors / n * 100:.0f} %"
+
+
+def summary() -> dict:
+    rows = []
+    for item in scan_input.scans():
+        t = load(item["id"])
+        if t is None:
+            continue
+        try:
+            c = compare(item["id"], t)
+        except Exception as e:                       # 검출 실패한 스캔은 집계에서 빼고 알린다
+            rows.append({"scan": item["id"], "stage": t["stage"], "error": str(e)})
+            continue
+        rows.append({"scan": item["id"], "truth": t, "cmp": c, "stage": t["stage"]})
+    out = {"scans": len(rows), "stages": {}}
+    for stage in STAGES:
+        rs = [r for r in rows if r["stage"] == stage and "cmp" in r]
+        tp = sum(len(r["cmp"]["tp"]) for r in rs); fn = sum(len(r["cmp"]["fn"]) for r in rs)
+        fp = sum(len(r["cmp"]["fp"]) for r in rs); tn = sum(r["cmp"]["tn"] for r in rs)
+        per_type = {k: 0 for k in DEFECT_TYPES}
+        for r in rs:
+            for kinds in r["truth"]["dies"].values():
+                for k in kinds:
+                    per_type[k] += 1
+        per_pattern: dict[str, int] = {}
+        pat_ok = 0
+        pat_n = 0
+        for r in rs:
+            want = r["truth"]["patterns"]
+            if want:
+                pat_n += 1
+                key = " + ".join(want)
+                per_pattern[key] = per_pattern.get(key, 0) + 1
+                pat_ok += set(want) <= set(r["truth"].get("judged", []))
+        out["stages"][stage] = {"scans": len(rs), "tp": tp, "fn": fn, "fp": fp, "tn": tn,
+                                "type_match": sum(len(r["cmp"]["type_match"]) for r in rs),
+                                "miss": _bound(fn, tp + fn), "false_alarm": _bound(fp, fp + tn),
+                                "per_type": per_type, "per_pattern": per_pattern,
+                                "pattern_ok": pat_ok, "pattern_n": pat_n}
+    out["failed"] = [r for r in rows if "error" in r]
+    return out
+
+
+def main():
+    s = summary()
+    print(f"정답이 기록된 스캔 {s['scans']}개")
+    for stage, v in s["stages"].items():
+        print(f"\n[{stage}단계 {STAGES[stage]}] 스캔 {v['scans']}개")
+        print(f"  검출 TP {v['tp']} · FN {v['fn']} · FP {v['fp']} · TN {v['tn']}, 종류 일치 {v['type_match']}/{v['tp']}")
+        print(f"  놓침: {v['miss']} / 오검출: {v['false_alarm']}")
+        if stage == 1:
+            print("  종류별 결함 다이 (목표 {}): ".format(TARGET[1]) +
+                  ", ".join(f"{DEFECT_TYPES[k]['ko']} {n}" for k, n in v["per_type"].items()))
+        else:
+            print(f"  패턴 판정 맞음 {v['pattern_ok']}/{v['pattern_n']} · 배치별 스캔 수 (목표 {TARGET[stage]}): "
+                  + (", ".join(f"{k} {n}" for k, n in v["per_pattern"].items()) or "없음"))
+    for r in s["failed"]:
+        print(f"\n집계에서 뺀 스캔 {r['scan']}: {r['error']}")
+
+
+if __name__ == "__main__":
+    main()
