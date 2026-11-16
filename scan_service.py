@@ -483,6 +483,8 @@ class ScanService:
             cmd = ["nice", "-n", "19", "ionice", "-c", "3"] + cmd
         if int(cfg["wafer_sign_y"]) < 0:
             cmd.append("--flip-y")
+        if int(cfg["wafer_sign_x"]) < 0:
+            cmd.append("--flip-x")
         if cfg.get("camera_scale_hint"):
             cmd.append(f"--scale-hint={float(cfg['camera_scale_hint']):.4f}")
         if cfg.get("camera_turn_hint") is not None:

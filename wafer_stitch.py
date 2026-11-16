@@ -512,10 +512,13 @@ def measure_grid(mos: np.ndarray, den: np.ndarray, wafer: dict | None, s: float 
 
 
 def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log=print, flip_y: bool | None = None,
+          flip_x: bool | None = None,
           scale_hint: float | None = None, turn_hint: float | None = None) -> dict:
     """스캔 폴더(manifest.json + 사진)로 웨이퍼 맵을 만든다.
     flip_y: 갠트리 +Y 가 웨이퍼 6시(노치) 쪽이면 참. 맵을 위아래로 뒤집어 노치가 아래, 다이 1 이 위에 오게 한다.
-    없으면 스캔 당시 설정(wafer_sign_y)을 따른다."""
+    없으면 스캔 당시 설정(wafer_sign_y)을 따른다.
+    flip_x: 갠트리 +X 가 웨이퍼 왼쪽이면 참. 맵을 좌우로 뒤집어 다이 번호가 위에서 본 웨이퍼와 같게 한다
+    (2026-11-16 갠트리 +X 가 왼쪽이라 다이 번호가 좌우 반대였다). 없으면 스캔 당시 설정(wafer_sign_x)을 따른다."""
     t0 = time.time()
     out_dir = out_dir or scan_dir
     with open(os.path.join(scan_dir, "manifest.json")) as f:
@@ -660,11 +663,17 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     # 색 정보를 줄이지 않고(4:4:4) 저장한다. 투명면 검출은 색 차이를 쓰므로 색이 8×8 블록으로 뭉개지면 안 된다
     if flip_y is None:
         flip_y = int(man.get("config", {}).get("wafer_sign_y", 1)) < 0
+    if flip_x is None:
+        flip_x = int(man.get("config", {}).get("wafer_sign_x", 1)) < 0
+
+    def oriented(a):
+        a = a[::-1] if flip_y else a
+        return a[:, ::-1] if flip_x else a
     # 아래 측정값은 뒤집기 전 좌표로 계산하고, 저장하는 영상과 좌표만 뒤집는다
-    cv2.imwrite(os.path.join(out_dir, name), out[::-1] if flip_y else out, [cv2.IMWRITE_JPEG_QUALITY, 92,
+    cv2.imwrite(os.path.join(out_dir, name), oriented(out), [cv2.IMWRITE_JPEG_QUALITY, 92,
                                                     cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444])
     # 촬영된 범위. 웨이퍼가 어둡게 찍히면 맵 밝기만으로는 미촬영 영역과 구분할 수 없다
-    cv2.imwrite(os.path.join(out_dir, MASK_NAME), (mask[::-1] if flip_y else mask).astype(np.uint8) * 255)
+    cv2.imwrite(os.path.join(out_dir, MASK_NAME), oriented(mask).astype(np.uint8) * 255)
 
     center_g = (pos.max(0) + pos.min(0)) / 2
     result = {
@@ -712,6 +721,15 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
             result["grid"]["angle_deg"] = -result["grid"]["angle_deg"]
             if "y" in result["grid"]["phase"]:
                 result["grid"]["phase"]["y"] = (1 - result["grid"]["phase"]["y"]) % 1
+    if flip_x:
+        result["flipped_x"] = True
+        if "wafer" in result:
+            cx_, cy_ = result["wafer"]["center_px"]
+            result["wafer"]["center_px"] = [round(SZ[1] - 1 - cx_, 1), cy_]
+        if "grid" in result:
+            result["grid"]["angle_deg"] = -result["grid"]["angle_deg"]
+            if "x" in result["grid"]["phase"]:
+                result["grid"]["phase"]["x"] = (1 - result["grid"]["phase"]["x"]) % 1
     result = json.loads(json.dumps(result, default=float))      # numpy 값을 일반 수로
     with open(os.path.join(out_dir, "wafer_map.json"), "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)

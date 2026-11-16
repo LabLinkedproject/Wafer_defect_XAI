@@ -6,7 +6,7 @@ map_job.py
 보드(3.8 GB)에서 웹 서버가 합성 세 번 만에 1.5 GB 를 넘겨 강제 종료된 뒤(2026-11-03) 따로 돌리게 했다.
 
 출력 줄: 'phase <stitch|detect>', 'log <메시지>', 실패하면 'error <메시지>' 와 종료 코드 1.
-실행: ./venv/bin/python map_job.py <스캔 폴더> [--flip-y] [--scale-hint=<px/갠트리 mm>] [--turn-hint=<도>]
+실행: ./venv/bin/python map_job.py <스캔 폴더> [--flip-y] [--flip-x] [--scale-hint=<px/갠트리 mm>] [--turn-hint=<도>]
 """
 import os
 import sys
@@ -51,7 +51,8 @@ def main() -> int:
         say("phase", "stitch")
         hint = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--scale-hint=")), None)
         turn = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--turn-hint=")), None)
-        wafer_stitch.build(scan_dir, log=lambda m: say("log", m), flip_y="--flip-y" in sys.argv, scale_hint=hint,
+        wafer_stitch.build(scan_dir, log=lambda m: say("log", m), flip_y="--flip-y" in sys.argv,
+                           flip_x="--flip-x" in sys.argv, scale_hint=hint,
                            turn_hint=turn)
         say("phase", "detect")
         say("log", "결함 검출")
