@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 
 import cv2
+import numpy as np
 
 import scan_config
 import wafer_detect
@@ -17,7 +18,7 @@ from .knowledge import DEFECT_TYPES
 
 SCAN_ROOT = os.path.join("captures", "scans")
 CACHE = "detection.json"
-VERSION = 9                     # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
+VERSION = 10                    # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
 
 
 def scan_dir(scan_id: str) -> str:
@@ -69,6 +70,10 @@ def detect(scan_id: str) -> dict:
                                                 surface=cfg.get("surface"))
     mask_path = os.path.join(d, meta.get("mask", ""))
     seen = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if meta.get("mask") and os.path.isfile(mask_path) else None
+    weak_path = os.path.join(d, meta.get("weak_mask", ""))
+    if seen is not None and meta.get("weak_mask") and os.path.isfile(weak_path):
+        # 카메라 반사·조명 번짐 자리로만 찍힌 곳은 같은 웨이퍼 다이끼리 비교하면 오검출이 난다(2026-11-14) → 뺀다
+        seen = np.where(cv2.imread(weak_path, cv2.IMREAD_GRAYSCALE) > 127, 0, seen).astype(np.uint8)
     r = wafer_detect.detect_array(gray, meta, seen=seen, min_area_mm2=prof["min_area_mm2"], sharp_z=prof["sharp_z"],
                                   dark_only=prof["dark_only"])
     out = {"version": VERSION, "scan": os.path.basename(d), "defects": r["defects"], "inspected": r["inspected"],

@@ -30,6 +30,7 @@ MIN_IMAGES = 8
 AGREE_SCALE = 0.06         # 직접 잰 카메라 축척이 최근 값과 이만큼 넘게 다르면 최근 값 기준으로 다시 잰다
 AGREE_TURN_DEG = 4.0
 MASK_NAME = "wafer_map_mask.png"
+WEAK_NAME = "wafer_map_weak.png"      # 카메라 반사·조명 번짐 자리로만 찍힌 곳 (기준 웨이퍼 없이 비교할 때 뺀다)
 GLARE_LEVEL = 245          # 사진들의 중앙값이 이 이상이면 조명 정반사 (카메라 상한 약 248)
 GLARE_RATIO = 1.35         # 주변(넓은 중앙값) 대비 이 배율보다 밝으면 정반사
 DIM_RATIO = 0.35           # 보통 밝기의 이 비율보다 어두운 곳(감광된 가장자리)은 합성에 쓰지 않는다
@@ -553,6 +554,7 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     halo &= ~glare
     if halo.mean() < 0.01:
         halo[:] = False
+    sat_glare = glare.copy()             # 포화된 반사만 (최종 맵은 이것만 빼고 모두 담는다)
     lens = lens_mask(np.median(np.stack(small), 0), glare, scale_hint * WORK_SCALE if scale_hint else None)
     if lens.any():
         log(f"카메라 자신의 반사(사진 가운데) {lens.mean() * 100:.1f}% 를 가림")
@@ -637,13 +639,19 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
         lc = light
     white = np.maximum(lc, floor)
     imgs = [x / white[..., None] for x in imgs]
-    # 번짐 구간은 격자·웨이퍼 측정에는 쓰고(다이 경계선이 그 자리에 있다) 결함 검출에 쓰는 최종 맵에서만 뺀다
-    final = glare | halo
-    if halo.any():
-        log(f"조명 반사 고리 번짐 {float(halo.mean()) * 100:.1f}% 는 최종 맵에서 뺌")
-    glare_c = final if lc.shape == light.shape else cv2.resize(final.astype(np.uint8), (lc.shape[1], lc.shape[0])) > 0
-    rgb, den = _compose(imgs, lc, cpos, Ac, S, SZ, kc, gains, color=True, glare=glare_c)
+    # 최종 맵은 포화된 반사만 빼고 모두 담는다. 카메라 반사·조명 고리 번짐 자리를 검게 비워 두면 화면에 없는
+    # 검은 반점으로 보이고 그 자리가 사각지대가 됐다(2026-11-16). 대신 그 자리만으로 찍힌 곳을 '약한 구역'으로
+    # 따로 저장해, 기준 웨이퍼 없이 같은 웨이퍼 다이끼리 비교할 때만 뺀다 (wafer_detect)
+    def to_c(m):
+        return m if lc.shape == light.shape else cv2.resize(m.astype(np.uint8), (lc.shape[1], lc.shape[0])) > 0
+    weak_src = (glare | halo) & ~sat_glare
+    if weak_src.any():
+        log(f"카메라 반사·조명 번짐 {float(weak_src.mean()) * 100:.1f}% 는 약한 구역으로 표시")
+    rgb, den = _compose(imgs, lc, cpos, Ac, S, SZ, kc, gains, color=True, glare=to_c(sat_glare))
     mask = den > 0.02
+    zeros = [np.zeros(lc.shape[:2], np.float32)] * len(imgs)
+    _, den_good = _compose(zeros, lc, cpos, Ac, S, SZ, kc, gains, glare=to_c(glare | halo))
+    weak = mask & ~(den_good > 0.02)
     # 조명 색 보정: 채널별 밝기를 맞춰 LED 색이 웨이퍼 색으로 보이지 않게 한다
     # 밝기 범위는 웨이퍼 안쪽으로 정한다. 바깥의 하얀 바닥까지 넣으면 어두운 투명면이 0~255 중 10~30 에 몰려
     # 계조가 부족해지고, 저장 잡음이 결함 대비만큼 커진다
@@ -659,6 +667,19 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     lo, hi = np.percentile(ref, 0.5), np.percentile(ref, 99.7)
     out = np.clip((rgb - lo) / max(hi - lo, 1e-6) * 245, 0, 255).astype(np.uint8)
     out[~mask] = (18, 18, 20)
+    if wafer:
+        # 웨이퍼 안의 미촬영 자리(모든 사진에서 조명이 포화된 다이 모서리)는 검게 두면 결함처럼 보인다(2026-11-16).
+        # 화면용으로 주변 색을 번지게 채운다. 검출은 촬영 범위 마스크로 계속 뺀다
+        yy_, xx_ = np.mgrid[0:SZ[0], 0:SZ[1]].astype(np.float32)
+        inside = np.hypot(xx_ - wafer["cx"] * out_scale, yy_ - wafer["cy"] * out_scale) < wafer["r"] * out_scale * 0.97
+        hole = inside & ~mask
+        if hole.any():
+            known = mask.astype(np.float32)
+            sig = max(3.0, 4.0 * S)                       # 약 4 mm
+            num = cv2.GaussianBlur(out.astype(np.float32) * known[..., None], (0, 0), sig)
+            w = cv2.GaussianBlur(known, (0, 0), sig)[..., None]
+            fill = np.clip(num / np.maximum(w, 1e-3), 0, 255).astype(np.uint8)
+            out[hole] = fill[hole]
     name = "wafer_map.jpg"
     # 색 정보를 줄이지 않고(4:4:4) 저장한다. 투명면 검출은 색 차이를 쓰므로 색이 8×8 블록으로 뭉개지면 안 된다
     if flip_y is None:
@@ -674,10 +695,11 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
                                                     cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444])
     # 촬영된 범위. 웨이퍼가 어둡게 찍히면 맵 밝기만으로는 미촬영 영역과 구분할 수 없다
     cv2.imwrite(os.path.join(out_dir, MASK_NAME), oriented(mask).astype(np.uint8) * 255)
+    cv2.imwrite(os.path.join(out_dir, WEAK_NAME), oriented(weak).astype(np.uint8) * 255)
 
     center_g = (pos.max(0) + pos.min(0)) / 2
     result = {
-        "images": len(dies), "map": name, "mask": MASK_NAME, "size_px": [SZ[1], SZ[0]],
+        "images": len(dies), "map": name, "mask": MASK_NAME, "weak_mask": WEAK_NAME, "size_px": [SZ[1], SZ[0]],
         "glare_pct": round(float(glare.mean() * 100), 1),
         "lens_pct": round(float(lens.mean() * 100), 2),
         "camera": {"px_per_mm_full": round(scale_mm / WORK_SCALE, 3), "rotation_deg": round(cam["theta_deg"], 2),
