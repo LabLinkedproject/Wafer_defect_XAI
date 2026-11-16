@@ -18,7 +18,7 @@ from .knowledge import DEFECT_TYPES
 
 SCAN_ROOT = os.path.join("captures", "scans")
 CACHE = "detection.json"
-VERSION = 14                    # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
+VERSION = 16                    # 검출 방식이 바뀌면 올린다. 이전 결과는 다시 계산한다
 
 
 def scan_dir(scan_id: str) -> str:
@@ -114,6 +114,7 @@ def detect(scan_id: str) -> dict:
     r = wafer_detect.detect_array(gray, meta, seen=seen, min_area_mm2=prof["min_area_mm2"], sharp_z=prof["sharp_z"],
                                   dark_only=prof["dark_only"], golden=golden)
     out = {"version": VERSION, "scan": os.path.basename(d), "defects": r["defects"], "inspected": r["inspected"],
+           "verdicts": r["verdicts"],
            "per_die": 2, "quadrats": [[k[0], k[1], k[2], v] for k, v in sorted(r["quadrats"].items())],
            "noise": r["noise"], "shift_px": r["shift_px"], "channel": prof["channel"], "reference": ref_id}
     tmp = path + ".tmp"
@@ -124,12 +125,17 @@ def detect(scan_id: str) -> dict:
 
 
 def die_defects(det: dict) -> dict[int, dict]:
-    """검출 목록 → {다이 id: {유형: 개수}} (분석 엔진 입력)"""
+    """검출 목록 → {다이 id: {유형: 1 있음 / 0 없음}} (분석 엔진 입력).
+    개수는 세지 않는다: 개수 오차가 판정 오류로 이어졌다 (docs/specs/die-verdict.md)."""
     out: dict[int, dict] = {}
     for x in det["defects"]:
-        c = out.setdefault(int(x["die"]), {t: 0 for t in DEFECT_TYPES})
-        c[x["type"]] = c.get(x["type"], 0) + 1
+        out.setdefault(int(x["die"]), {t: 0 for t in DEFECT_TYPES})[x["type"]] = 1
     return out
+
+
+def die_verdicts(det: dict) -> dict[int, str]:
+    """{다이 id: normal|defect|recheck}"""
+    return {int(k): v["verdict"] for k, v in det.get("verdicts", {}).items()}
 
 
 def quadrats(det: dict) -> dict[tuple, float]:

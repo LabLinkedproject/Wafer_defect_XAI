@@ -31,32 +31,46 @@ _HYP = {h["id"]: h for h in HYPOTHESES}
 _CHECK = {c["id"]: c for c in CHECKS}
 
 
-def _status(total: int) -> str:
-    if total == 0:
-        return "normal"
-    return "heavy" if total >= S.HEAVY_COUNT else "light"
+WAFER_DEFECT_RATIO = 0.10     # 불량 다이가 검사 다이의 이 비율 이상이면 웨이퍼 불량 (docs/specs/die-verdict.md)
+WAFER_KO = {"pass": "양품", "fail": "불량", "recheck": "재검사"}
 
 
 def _risk(die_stats: dict, top: str | None) -> dict:
     active = die_stats["active"] or 1
-    heavy, light = die_stats["heavy"], die_stats["light"]
-    ratio_term = (heavy + light) / active * 60
-    heavy_term = min(heavy * 1.5, 25)
+    ratio_term = die_stats["defect"] / active * 60
+    recheck_term = min(die_stats["recheck"] * 1.5, 25)
     pattern_term = SYSTEMATIC_BONUS if top not in (None, "Random") else 0
-    score = max(0.0, min(100.0, ratio_term + heavy_term + pattern_term))
+    score = max(0.0, min(100.0, ratio_term + recheck_term + pattern_term))
     level = "Low" if score < 30 else "Medium" if score < 60 else "High" if score < 80 else "Critical"
     return {"score": round(score, 1), "level": level, "advice": SEVERITY_ADVICE[level],
             "terms": [{"name": "불량 다이 비율", "value": round(ratio_term, 1), "max": 60},
-                      {"name": "심한 다이 가산", "value": round(heavy_term, 1), "max": 25},
+                      {"name": "재검사 다이 가산", "value": round(recheck_term, 1), "max": 25},
                       {"name": "구조적 패턴 가산", "value": pattern_term, "max": SYSTEMATIC_BONUS}]}
 
 
 def _yield(die_stats: dict) -> dict:
+    """불량이 아닌 다이 비율. 재검사 다이는 회생 가능으로 보고 넣는다 (사람이 불량으로 바꾸면 빠진다)."""
     active = die_stats["active"] or 1
-    pct = round(die_stats["normal"] / active * 100, 1)
+    pct = round((die_stats["active"] - die_stats["defect"]) / active * 100, 1)
     level = "Excellent" if pct >= 90 else "Good" if pct >= 75 else "Marginal" if pct >= 50 else "Poor"
-    return {"yield_pct": pct, "level": level, "good_die": die_stats["normal"], "light_die": die_stats["light"],
-            "heavy_die": die_stats["heavy"], "active_die": die_stats["active"]}
+    return {"yield_pct": pct, "level": level, "good_die": die_stats["normal"], "recheck_die": die_stats["recheck"],
+            "defect_die": die_stats["defect"], "active_die": die_stats["active"]}
+
+
+def _wafer(labels: list, stats: dict, suspect) -> dict:
+    """웨이퍼 판정: 패턴 또는 불량 다이 비율 → 불량, 재검사 다이나 의심 → 재검사(사람 판단), 그 밖 양품."""
+    ratio = stats["defect"] / (stats["active"] or 1)
+    if labels:
+        v, why = "fail", f"{' + '.join(labels)} 패턴"
+    elif ratio >= WAFER_DEFECT_RATIO:
+        v, why = "fail", f"불량 다이 {stats['defect']}개 ({ratio * 100:.0f} %, 기준 {WAFER_DEFECT_RATIO * 100:.0f} %)"
+    elif stats["recheck"]:
+        v, why = "recheck", f"재검사 다이 {stats['recheck']}개 — 육안 판정 필요"
+    elif suspect:
+        v, why = "recheck", f"{suspect['name']} 의심 (점수 {suspect['score']:.2f}) — 육안 판정 필요"
+    else:
+        v, why = "pass", "패턴·불량 다이 기준 미달"
+    return {"verdict": v, "ko": WAFER_KO[v], "reason": why}
 
 
 SUSPECT_MIN = 0.5   # 판정선 아래라도 이 점수 이상이면 정상과 구분해 '의심'으로 알린다
@@ -117,13 +131,16 @@ def _build_trace(ctx: dict) -> list[dict]:
     return t
 
 
-def analyze(dies, spec, defects, answers=None, target=None, model=None) -> dict:
-    """dies: scoring.annotate 결과, defects: {다이 id: {유형: 개수}}, answers: [{check, answer}]
-    model: 분류기 (없으면 규칙 기반). 학습 모델이면 판정·다이 가림·반사실을 그 모델로 계산한다."""
+def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts=None) -> dict:
+    """dies: scoring.annotate 결과, defects: {다이 id: {유형: 있음}}, answers: [{check, answer}]
+    model: 분류기 (없으면 규칙 기반). 학습 모델이면 판정·다이 가림·반사실을 그 모델로 계산한다.
+    verdicts: {다이 id: normal|defect|recheck}. 없으면 결함 다이를 모두 불량으로 본다(시나리오)."""
     answers = answers or []
     defects = {i: c for i, c in defects.items() if sum(c.values()) > 0}
+    verdicts = verdicts or {i: "defect" for i in defects}
 
-    model = model or S.RuleModel(dies, defects)
+    # 패턴 모델 입력은 불량 다이만. 재검사 다이는 정상 취급 (회생 가능한 엣지 결함을 패턴으로 읽지 않게)
+    model = model or S.RuleModel(dies, {i: c for i, c in defects.items() if verdicts.get(i) == "defect"})
     scores = model.scores()
     labels = S.labels_from(scores, model)
     ordered = sorted(PATTERNS, key=lambda c: scores[c]["score"], reverse=True)
@@ -139,14 +156,14 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None) -> dict:
     cf = S.counterfactual(model, tgt, relevance) if (model.ids and base >= model.threshold(tgt)) else {"found": False}
 
     # 다이·존·유형 집계
-    die_rows, stats = [], {"active": len(dies), "normal": 0, "light": 0, "heavy": 0}
+    die_rows, stats = [], {"active": len(dies), "normal": 0, "defect": 0, "recheck": 0}
     zones = {z: {"dies": 0, "defect_dies": 0, "count": 0} for z in S.ZONES}
     sectors = [0] * 8
     type_tot = {t: {"count": 0, "dies": 0} for t in DEFECT_TYPES}
     for d in dies:
         c = defects.get(d["id"], {})
         total = sum(c.values())
-        st = _status(total)
+        st = verdicts.get(d["id"], "normal")
         stats[st] += 1
         zones[d["zone"]]["dies"] += 1
         zones[d["zone"]]["count"] += total
@@ -203,8 +220,8 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None) -> dict:
     support = [d for d in die_rows if d["relevance"] > 0]
     projected = None
     if labels and yld["active_die"]:
-        recovered = sum(1 for d in support if d["total"] > 0)
-        projected = {"yield_pct": round(min(100.0, (stats["normal"] + recovered) / yld["active_die"] * 100), 1),
+        recovered = sum(1 for d in support if d["status"] == "defect")
+        projected = {"yield_pct": round(min(100.0, (stats["active"] - stats["defect"] + recovered) / yld["active_die"] * 100), 1),
                      "recovered_die": recovered}
 
     recipe = []
@@ -248,7 +265,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None) -> dict:
                    "entropy": h_now, "answered": [a["check"] for a in answers]},
         "risk": risk, "yield": yld, "projected": projected, "recipe": recipe,
         "stain": stain, "detections": detections, "image_size": render.IMAGE_SIZE,
-        "suspect": suspect,
+        "suspect": suspect, "wafer": _wafer(labels, stats, suspect),
         "conclusion": _conclusion(labels, hyp_list[0] if hyp_list else None, dominant_zone, yld["yield_pct"], suspect),
         "trace": trace,
     }

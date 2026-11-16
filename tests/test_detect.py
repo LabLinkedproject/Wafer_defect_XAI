@@ -61,12 +61,43 @@ class Detect(unittest.TestCase):
         r = W.detect_array(g, meta)
         self.assertEqual({d["type"] for d in r["defects"] if d["die"] == 20}, {"stain"})
 
+    def test_die_verdict_by_position(self):
+        # docs/specs/die-verdict.md: 중심부 침범 → 불량, 가장자리 띠의 작은 결함 → 재검사, 없음 → 정상
+        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
+        mm = P / 32
+        a, b = R.die_slot(die_at(20))
+        g, meta = clean_map()
+        cv2.circle(g, (b * P + 85, a * P + 85), 5, 120, -1)                       # 20: 가운데 (실물만큼 옅게)
+        a2, b2 = R.die_slot(die_at(27))
+        cv2.circle(g, (int(b2 * P + 2.5 * mm), a2 * P + 85), 5, 120, -1)          # 27: 왼쪽 가장자리 2.5 mm
+        v = W.detect_array(g, meta, **front)["verdicts"]
+        self.assertEqual((v[20]["verdict"], v[27]["verdict"], v[5]["verdict"]), ("defect", "recheck", "normal"))
+
+    def test_die_verdict_rule(self):
+        self.assertEqual(W.die_verdict(False, 0.0), "normal")
+        self.assertEqual(W.die_verdict(True, 0.002), "defect")       # 중심부에 작은 점
+        self.assertEqual(W.die_verdict(False, 0.01), "recheck")      # 가장자리에만 작게
+        self.assertEqual(W.die_verdict(False, 0.06), "defect")       # 가장자리라도 너무 많음
+
+    def test_scratch_across_two_dies_is_one_defect(self):
+        # 2026-11-16 18:20 실물: 스크래치 하나가 다이 경계를 넘어 조각마다 파티클·스크래치로 따로 잡혔다
+        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
+        g, meta = clean_map()
+        a, b = R.die_slot(die_at(20))
+        cv2.line(g, (b * P + 60, a * P + 70), (b * P + P + 110, a * P + 100), 110, 3)  # 20 → 21 (오른쪽 이웃)
+        r = W.detect_array(g, meta, **front)
+        parts = [d for d in r["defects"] if d["die"] in (20, 21)]
+        self.assertEqual({d["die"] for d in parts}, {20, 21})
+        self.assertEqual({d["type"] for d in parts}, {"scratch"})
+        self.assertEqual(len({d["obj"] for d in parts}), 1)
+
     def test_kind_rules(self):
         self.assertEqual(W._kind(False, 4.0, 2.5, 1.2), "particle")
         self.assertEqual(W._kind(False, 26.8, 14.8, 2.1), "stain")      # 반사 마스크에 반쯤 가린 스테인 (길이로)
         self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 면적으로
         self.assertEqual(W._kind(False, 12.0, 20.0, 6.0), "scratch")    # 길쭉하면 길어도 스크래치
         self.assertEqual(W._kind(True, 5.0, 3.0, 1.0), "stain")         # 번짐 채널
+        self.assertEqual(W._kind(True, 60.0, 40.0, 8.0), "scratch")     # 번짐 조각이 붙은 긴 스크래치
 
     def test_small_dot_at_die_corner_is_grid_residual(self):
         # 2026-11-16 17:41 실물: 사진 이음매에서 격자선 교차점이 어긋나 다이 모서리마다 작은 점이 오검출됐다

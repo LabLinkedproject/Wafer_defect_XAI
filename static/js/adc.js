@@ -6,7 +6,7 @@
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const ZONE_KO = { center: "중앙", middle: "중간", edge: "엣지" };
   const TYPE_COLOR = { particle: "--particle", scratch: "--scratch", stain: "--stain" };
-  const STATUS_KO = { normal: "정상", light: "경미", heavy: "심각" };
+  const STATUS_KO = { normal: "정상", defect: "불량", recheck: "재검사" };
 
   let S = null;
   let mode = "status";
@@ -73,9 +73,10 @@
     for (const [k, e] of Object.entries(S.engines)) {
       $(`eng-${k}`).textContent = e.now;
     }
-    const edited = ss.edited ? " · 엔지니어가 다이를 수정한 상태" : "";
+    const edited = ss.edited ? " · 엔지니어가 다이 판정을 확정한 상태" : "";
+    const y = S.yield;
     $("simbar").textContent = scan
-      ? `${ss.scan_name} · 검사 다이 ${ss.inspected}/${S.spec.die_count} · 검출 ${ss.found}건${edited} · 패턴 판정 ${S.model.name}`
+      ? `${ss.scan_name} · 검사 다이 ${ss.inspected}/${S.spec.die_count} · 불량 ${y.defect_die} · 재검사 ${y.recheck_die}${edited} · 패턴 판정 ${S.model.name}`
       : "스캔 기록이 없습니다. 위에서 웨이퍼 스캔을 시작하세요.";
   }
 
@@ -83,10 +84,12 @@
     const top = S.top;
     const pat = S.patterns.find((p) => p.name === top);
     const sp = S.suspect;
-    $("verdict-title").textContent = top || (sp ? `${sp.name} 의심` : "Normal");
-    $("verdict-sub").textContent = top ? `${pat.ko} · ${pat.desc}`
-      : sp ? `점수 ${sp.score.toFixed(2)} · 판정선 ${sp.threshold.toFixed(2)} 아래 · 엔지니어 검토 권장` : "판정선을 넘는 결함 패턴이 없습니다";
-    const tags = S.labels.slice(1).map((l) => `<span class="tag">복합 ${esc(l)}</span>`);
+    const w = S.wafer;
+    $("verdict-title").textContent = `웨이퍼 ${w.ko}`;
+    $("verdict-title").className = `wv-${w.verdict}`;
+    $("verdict-sub").textContent = w.reason;
+    const tags = [top ? `<span class="tag">패턴 ${esc(top)} · ${esc(pat.ko)}</span>` : sp ? `<span class="tag warn">${esc(sp.name)} 의심 ${sp.score.toFixed(2)}</span>` : '<span class="tag">패턴 없음</span>'];
+    tags.push(...S.labels.slice(1).map((l) => `<span class="tag">복합 ${esc(l)}</span>`));
     if (S.ambiguous) tags.push('<span class="tag warn">판정 여유 낮음 · 엔지니어 검토 권장</span>');
     $("verdict-labels").innerHTML = tags.join("");
 
@@ -95,7 +98,7 @@
     const y = S.yield;
     $("k-yield").textContent = `${y.yield_pct}%`;
     $("k-yield").className = `lv-${y.level}`;
-    $("k-yield-sub").textContent = `정상 ${y.good_die} / ${y.active_die}다이`;
+    $("k-yield-sub").textContent = `불량 아닌 다이 · 재검사 ${y.recheck_die} 포함`;
     const r = S.risk;
     $("k-risk").textContent = r.score;
     $("k-risk").className = `lv-${r.level}`;
@@ -129,10 +132,13 @@
       color: css(TYPE_COLOR[f.type]), title: `다이 ${f.die} · ${S.types[f.type].ko} · ${f.area_mm2} mm²`,
     })) : null;
     WaferView.draw($("real-view"), map, { grid: $("show-grid").checked, selected: selected, marks, pitchMm: S.spec.pitch_mm });
-    const by = Object.values(S.types).filter((t) => t.count).map((t) => `${t.ko} ${t.count}`).join(" · ") || "결함 없음";
+    // 다이를 넘는 결함은 하나로 센다 (같은 obj)
+    const objs = new Map(S.found.map((f) => [f.obj, f.type]));
+    const kinds = Object.keys(S.types).map((k) => [S.types[k].ko, [...objs.values()].filter((t) => t === k).length]).filter(([, n]) => n);
+    const by = kinds.map(([ko, n]) => `${ko} ${n}`).join(" · ") || "결함 없음";
     $("input-note").textContent = inputMode === "result"
-      ? `순정 웨이퍼(${map.dir}) 위에 검출 결함 ${S.found.length}건의 실제 모습을 붙인 결과 · 놓친 결함은 '실측 맵'에서 확인하세요`
-      : `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${S.wafer_map.coverage_pct}% · 기준 다이 비교로 검출 ${S.found.length}건 (${by})`;
+      ? `순정 웨이퍼(${map.dir}) 위에 검출 결함 ${objs.size}개의 실제 모습을 붙인 결과 · 놓친 결함은 '실측 맵'에서 확인하세요`
+      : `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${S.wafer_map.coverage_pct}% · 기준 다이 비교로 결함 ${objs.size}개 (${by}, 다이를 넘는 것은 하나로)`;
   }
 
   // ── 웨이퍼 맵 ────────────────────────────────────────────────
@@ -142,13 +148,10 @@
     return `rgb(${pa.map((v, i) => Math.round(v + (pb[i] - v) * t)).join(",")})`;
   }
 
-  function dieFill(d, maxCount, maxRel) {
+  function dieFill(d, maxRel) {
     if (mode === "type") {
       if (!d.type) return { fill: css("--normal"), op: 1 };
-      return { fill: css(TYPE_COLOR[d.type]), op: d.status === "heavy" ? 1 : 0.55 };
-    }
-    if (mode === "heat") {
-      return { fill: mix("f3f5f8", "b3261e", maxCount ? d.total / maxCount : 0), op: 1 };
+      return { fill: css(TYPE_COLOR[d.type]), op: d.status === "defect" ? 1 : 0.55 };
     }
     if (mode === "xai") {
       if (!d.total) return { fill: "#eef1f5", op: 1 };
@@ -165,7 +168,6 @@
     const c = 260;
     const s = (R * 2) / S.spec.diameter_mm;
     const p = S.spec.pitch_mm * s;
-    const maxCount = Math.max(1, ...S.dies.map((d) => d.total));
     const maxRel = Math.max(1e-6, ...S.dies.map((d) => Math.abs(d.relevance)));
     let html = `<circle cx="${c}" cy="${c}" r="${R}" fill="#fbfcfd" stroke="#44505e" stroke-width="2"/>`;
     if (interactive && $("show-zones").checked) {
@@ -177,29 +179,28 @@
     for (const d of S.dies) {
       const x = c + (d.x_mm - S.spec.pitch_mm / 2) * s;
       const y = c - (d.y_mm + S.spec.pitch_mm / 2) * s;
-      const { fill, op } = dieFill(d, maxCount, maxRel);
-      const showNum = d.total > 0 && d.type !== "stain";
-      const light = mode === "xai" ? Math.abs(d.relevance / maxRel) > 0.55 : (mode === "type" && d.status === "heavy") || (mode === "status" && d.status === "heavy") || (mode === "heat" && d.total / maxCount > 0.6);
-      const label = `다이 ${d.id}, ${ZONE_KO[d.zone]} 존, ${STATUS_KO[d.status]}, 결함 ${d.total}건`;
+      const { fill, op } = dieFill(d, maxRel);
+      // 색만으로 뜻을 전하지 않게 칸에 글자를 같이 둔다
+      const mark = { defect: "불", recheck: "재" }[d.status];
+      const dark = mode === "xai" ? Math.abs(d.relevance / maxRel) > 0.55 : d.status === "defect";
+      const label = `다이 ${d.id}, ${ZONE_KO[d.zone]} 존, ${STATUS_KO[d.status]}`;
       const attrs = interactive ? `class="die-cell${selected === d.id ? " sel" : ""}" data-id="${d.id}" tabindex="0" role="button" aria-label="${label}"` : "";
       html += `<g ${attrs}>
         <rect x="${x + 1}" y="${y + 1}" width="${p - 2}" height="${p - 2}" rx="2" fill="#fff" stroke="#9aa6b3"/>
         <rect x="${x + 2}" y="${y + 2}" width="${p - 4}" height="${p - 4}" rx="1" fill="${fill}" fill-opacity="${op}"/>
-        ${showNum && interactive ? `<text x="${x + p / 2}" y="${y + p / 2 + 5}" text-anchor="middle" font-size="14" font-weight="700" fill="${light ? "#fff" : "#17212e"}">${d.total}</text>` : ""}
+        ${mark && interactive ? `<text x="${x + p / 2}" y="${y + p / 2 + 5}" text-anchor="middle" font-size="14" font-weight="700" fill="${dark ? "#fff" : "#17212e"}">${mark}</text>` : ""}
       </g>`;
     }
     html += `<path d="M${c - 8} ${c + R + 2}L${c + 8} ${c + R + 2}L${c} ${c + R - 9}Z" fill="#44505e"/>`;
     svg.innerHTML = html;
     mode = prevMode;
-    return maxCount;
   }
 
   function renderMap() {
-    const maxCount = drawMap($("wafer-map"), mode, true);
+    drawMap($("wafer-map"), mode, true);
     const leg = {
-      status: `<span><i style="background:${css("--normal")}"></i>정상</span><span><i style="background:${css("--light")}"></i>경미 (1~2건)</span><span><i style="background:${css("--heavy")}"></i>심각 (3건 이상)</span>`,
-      type: Object.entries(S.types).map(([k, t]) => `<span><i style="background:${css(TYPE_COLOR[k])}"></i>${esc(t.ko)}</span>`).join("") + "<span>진할수록 심각</span>",
-      heat: `<span><i class="grad" style="background:linear-gradient(90deg,#f3f5f8,#b3261e)"></i>다이당 결함 0 → ${maxCount}건</span>`,
+      status: `<span><i style="background:${css("--normal")}"></i>정상</span><span><i style="background:${css("--defect")}"></i>불 불량 (중심부 침범 또는 면적 5 % 이상)</span><span><i style="background:${css("--recheck")}"></i>재 재검사 (가장자리에 작게, 육안 판정)</span>`,
+      type: Object.entries(S.types).map(([k, t]) => `<span><i style="background:${css(TYPE_COLOR[k])}"></i>${esc(t.ko)}</span>`).join("") + "<span>진하면 불량, 옅으면 재검사</span>",
       xai: `<span><i class="grad" style="background:linear-gradient(90deg,#c4553f,#e6eef8,#004898)"></i>방해 ← 없음 → ${esc(S.xai.target)} 판정 지지</span>`,
     };
     $("map-legend").innerHTML = leg[mode];
@@ -218,27 +219,31 @@
       return;
     }
     const canCrop = S.wafer_map?.wafer && S.wafer_map?.grid;
-    const counts = Object.entries(d.counts).filter(([, v]) => v).map(([k, v]) => `${S.types[k].ko} ${v}`).join(", ") || "없음";
-    const dose = (t, n, label) => `<button type="button" class="btn" data-edit="${t}" data-n="${n}">${label}</button>`;
+    const kinds = Object.entries(d.counts).filter(([, v]) => v).map(([k]) => S.types[k].ko).join(", ") || "없음";
+    const v = S.die_verdicts?.[d.id];
+    const why = !v ? "-" : v.by === "operator" ? "엔지니어 확정"
+      : v.center ? "결함이 중심부에 닿음" : v.area_ratio >= 0.05 ? `결함 면적 ${(v.area_ratio * 100).toFixed(1)} %`
+      : v.area_ratio > 0 ? `가장자리에만 작게 (${(v.area_ratio * 100).toFixed(1)} %)` : "결함 없음";
+    const set = (verdict, label, cls = "") => `<button type="button" class="btn ${cls}" data-verdict="${verdict}">${label}</button>`;
     body.innerHTML = `
-      ${canCrop ? `<canvas class="die-photo" id="die-crop" width="320" height="320" role="img" aria-label="합성 맵의 다이 ${d.id} 위치"></canvas><p class="note photo-note">합성 맵의 이 다이 위치 (아래 결함은 ${S.session.edited ? "수정된 " : ""}검출 결과)</p>` : ""}
+      ${canCrop ? `<canvas class="die-photo" id="die-crop" width="320" height="320" role="img" aria-label="합성 맵의 다이 ${d.id} 위치"></canvas><p class="note photo-note">합성 맵의 이 다이 위치</p>` : ""}
       <dl class="facts">
         <dt>다이</dt><dd>${d.id}번 (행 ${d.row + 1}, 열 ${d.col + 1})</dd>
         <dt>위치</dt><dd>${d.x_mm}, ${d.y_mm} mm</dd>
         <dt>존</dt><dd>${ZONE_KO[d.zone]}</dd>
-        <dt>상태</dt><dd>${STATUS_KO[d.status]}</dd>
-        <dt>결함</dt><dd>${esc(counts)}</dd>
-        <dt>판정 기여</dt><dd>${d.total ? `${d.relevance >= 0 ? "+" : ""}${d.relevance.toFixed(3)}` : "-"}</dd>
+        <dt>판정</dt><dd>${STATUS_KO[d.status]}</dd>
+        <dt>근거</dt><dd>${esc(why)}</dd>
+        <dt>결함 종류</dt><dd>${esc(kinds)}</dd>
+        <dt>패턴 기여</dt><dd>${d.status === "defect" ? `${d.relevance >= 0 ? "+" : ""}${d.relevance.toFixed(3)}` : "-"}</dd>
       </dl>
-      <div class="edit-title">이 다이의 결함 수정</div>
+      <div class="edit-title">${d.status === "recheck" ? "육안으로 보고 판정을 확정하세요" : "엔지니어 판정"}</div>
       <div class="edit-row">
-        ${dose("particle", 1, "파티클 1")}${dose("particle", 3, "파티클 3")}
-        ${dose("scratch", 2, "스크래치")}${dose("stain", 3, "스테인")}
-        <button type="button" class="btn ghost" data-edit="" data-n="0" style="grid-column:1/-1">결함 없음으로</button>
+        ${set("normal", "정상으로 확정")}${set("defect", "불량으로 확정")}
+        ${v?.by === "operator" ? `<button type="button" class="btn ghost" data-verdict="" style="grid-column:1/-1">검출 판정으로 되돌리기</button>` : ""}
       </div>`;
     if (canCrop) WaferView.cropDie($("die-crop"), S.wafer_map, d.row, d.col, S.spec.grid);
-    body.querySelectorAll("[data-edit]").forEach((b) => {
-      b.onclick = () => act("/api/adc/die", { id: d.id, type: b.dataset.edit || null, count: Number(b.dataset.n) });
+    body.querySelectorAll("[data-verdict]").forEach((b) => {
+      b.onclick = () => act("/api/adc/die", { id: d.id, verdict: b.dataset.verdict || null });
     });
   }
 
@@ -274,9 +279,9 @@
       html += `<path d="M${cx + r * Math.cos(start)} ${cy + r * Math.sin(start)}A${r} ${r} 0 ${large} 1 ${cx + r * Math.cos(end)} ${cy + r * Math.sin(end)}" fill="none" stroke="${css(TYPE_COLOR[k])}" stroke-width="16"/>`;
       start = end;
     }
-    html += `<text x="${cx}" y="${cy + 6}" text-anchor="middle" font-size="19" font-weight="700" fill="#17212e">${S.total_defects}</text>`;
+    html += `<text x="${cx}" y="${cy + 6}" text-anchor="middle" font-size="19" font-weight="700" fill="#17212e">${S.defect_dies}</text>`;
     $("type-ring").innerHTML = html;
-    $("type-list").innerHTML = entries.map(([k, t]) => `<li><span><i style="background:${css(TYPE_COLOR[k])}"></i>${esc(t.ko)}</span><span class="num">${t.count}건 ${pct(t.share)}</span></li>`).join("");
+    $("type-list").innerHTML = entries.map(([k, t]) => `<li><span><i style="background:${css(TYPE_COLOR[k])}"></i>${esc(t.ko)}</span><span class="num">${t.dies}다이 ${pct(t.share)}</span></li>`).join("");
   }
 
   function renderZones() {
@@ -417,8 +422,8 @@
       <div class="yield-track"><span class="yield-up" style="left:${y.yield_pct}%;width:${p ? p.yield_pct - y.yield_pct : 0}%"></span><span class="yield-fill" style="width:${y.yield_pct}%"></span></div>
       ${p ? `<p class="note">빗금: 판정을 지지하는 ${p.recovered_die}다이가 모두 회복될 때의 상한 ${p.yield_pct}%</p>` : ""}
       <div class="dies4">
-        <div><b>${y.good_die}</b><span>정상</span></div><div><b>${y.light_die}</b><span>경미</span></div>
-        <div><b>${y.heavy_die}</b><span>심각</span></div><div><b>${y.active_die}</b><span>전체</span></div>
+        <div><b>${y.good_die}</b><span>정상</span></div><div><b>${y.recheck_die}</b><span>재검사</span></div>
+        <div><b>${y.defect_die}</b><span>불량</span></div><div><b>${y.active_die}</b><span>전체</span></div>
       </div>`;
 
     $("fb-count").textContent = `기록 ${S.session.feedback_count}건`;

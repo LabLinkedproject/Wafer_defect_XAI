@@ -97,19 +97,6 @@ def compare(scan_id: str, truth: dict | None = None) -> dict | None:
     type_ok = sorted(d for d in tp if want[d] & found[d])
     out = {"tp": tp, "fn": fn, "fp": fp, "tn": tn, "type_match": type_ok,
            "not_inspected": sorted(d for d in want if d not in inspected)}
-    if truth.get("counts"):
-        n_found: dict[int, dict] = {}
-        for d in det["defects"]:
-            n_found.setdefault(int(d["die"]), {}).setdefault(d["type"], 0)
-            n_found[int(d["die"])][d["type"]] += 1
-        rows = []
-        for k, per in truth["counts"].items():
-            die = int(k)
-            if die in inspected:
-                for t, n in per.items():
-                    rows.append({"die": die, "type": t, "truth": n, "found": n_found.get(die, {}).get(t, 0)})
-        out["counts"] = {"rows": rows, "exact": sum(r["truth"] == r["found"] for r in rows),
-                         "truth_total": sum(r["truth"] for r in rows), "found_total": sum(r["found"] for r in rows)}
     return out
 
 
@@ -139,8 +126,6 @@ def record(scan_id: str) -> dict | None:
           "dies": {"tp": c["tp"], "fn": c["fn"], "fp": c["fp"], "not_inspected": c["not_inspected"]},
           "type_match": len(c["type_match"]), "patterns": t["patterns"], "judged": t.get("judged", []),
           "channel": det.get("channel"), "reference": det.get("reference"), "detect_version": det.get("version")}
-    if c.get("counts"):
-        ev["counts"] = c["counts"]
     t["evaluation"] = ev
     _write_json(_path(scan_id), t)
     log = os.path.join(os.path.dirname(scan_input.scan_dir(scan_id)), EVAL_LOG)

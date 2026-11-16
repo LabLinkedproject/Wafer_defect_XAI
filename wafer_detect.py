@@ -43,6 +43,8 @@ LINE_GUARD_MM = 5.0           # 다이 경계선에서 이 거리 안의 가는 
 LINE_RESIDUAL_ELONGATION = 3.0
 CORNER_GUARD_MM = 4.0         # 다이 모서리(두 경계선 모두)에서 이 거리 안의 작은 점은 격자선 교차점 잔차
 CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 어긋남이 1~4.5 mm² 점 9개로 남았다
+EDGE_BAND_MM = 4.0            # 다이 가장자리 띠. 안쪽 24×24 mm 가 중심부 (docs/specs/die-verdict.md)
+DEFECT_AREA_RATIO = 0.05      # 다이 안 결함 면적이 이 비율 이상이면 위치와 상관없이 불량
 GROW_RATIO = 0.6              # 이중 문턱의 낮은 쪽 (높은 문턱 대비)
 DARK_BACKGROUND = 120          # 격자선 밝기 정보가 없는 예전 맵: 웨이퍼 안쪽 중앙값이 이보다 어두우면 투명 앞면
 CHROMA_GAIN = 3.0             # R−B 차이를 밝기 영상 범위로 늘리는 배율
@@ -227,18 +229,20 @@ def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:
     """결함 종류. 번짐 채널이거나, 선명해도 크거나 긴(길쭉하지 않은) 덩어리는 스테인이다.
     길이 기준: 반사 마스크에 반쯤 가린 스테인은 면적이 26.8 mm² 로 줄었지만 길이는 14.8 mm 였다(2026-11-16 17:41).
     파티클은 지금까지 최대 8.9 mm."""
+    if elong >= SCRATCH_ELONGATION and long_mm >= SCRATCH_MIN_MM:
+        return "scratch"          # 다이를 넘어 이은 스크래치에 번짐 조각이 붙어도 스크래치 (2026-11-16 18:20)
     if soft:
         return "stain"
     if elong >= SCRATCH_ELONGATION:
-        return "scratch" if long_mm >= SCRATCH_MIN_MM else "particle"
+        return "particle"
     return "stain" if area_mm2 >= STAIN_MIN_AREA_MM2 or long_mm >= STAIN_MIN_LENGTH_MM else "particle"
 
 
 def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z: float = SHARP_Z,
-            dark_only: bool = False) -> list[dict]:
-    """z 지도에서 결함 덩어리를 뽑아 유형과 웨이퍼 좌표를 붙인다."""
+            dark_only: bool = False):
+    """z 지도에서 결함 조각을 뽑아 다이마다 c["pixels"](전부)와 c["soft_px"](번짐 채널)에 칠한다.
+    종류와 판정은 link_defects 가 웨이퍼 단위로 이은 뒤에 정한다."""
     mm = WAFER_MODEL["pitch_mm"] / P
-    found = []
     for c in crops.values():
         thr = max(sharp_z * noise["sharp_sigma"], MIN_CONTRAST)
         # dark_only: 주변보다 어두워진 것만 결함으로 센다. 투명면에서 표면 흠집·얼룩은 희게, 붙은 결함은 검게 보인다
@@ -255,6 +259,7 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
         soft = (soft_z > max(STAIN_Z * noise["soft_sigma"], MIN_STAIN_CONTRAST)) & c["mask"]
         stain_min = int(MIN_STAIN_RATIO * P * P)
         c["pixels"] = np.zeros((P, P), bool)
+        c["soft_px"] = np.zeros((P, P), bool)
         # 번짐 지도는 흐림을 거치므로 선명한 결함 둘레에도 반응한다. 그 둘레는 번짐 결함에서 뺀다
         halo = cv2.dilate(sharp.astype(np.uint8), np.ones((2 * (P // 14) + 1,) * 2, np.uint8)) > 0
         for region, kind_min, is_stain in ((sharp, MIN_SHARP_AREA, False), (soft & ~halo, stain_min, True)):
@@ -268,13 +273,67 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
                 elong = max(w, h) / short
                 if not is_stain and _grid_residual(xs, ys, w, h, area * mm * mm, P, mm):
                     continue
-                kind = _kind(is_stain, area * mm * mm, long_mm, elong)
-                x_mm = (c["x"] + xs.mean() - R.GRID_DIES / 2 * P) * mm
-                y_mm = (R.GRID_DIES / 2 * P - c["y"] - ys.mean()) * mm
-                found.append({"die": c["die"]["id"], "type": kind, "x_mm": round(float(x_mm), 2), "y_mm": round(float(y_mm), 2),
-                              "area_mm2": round(float(area) * mm * mm, 2), "length_mm": round(float(long_mm), 2)})
                 c["pixels"] |= comp
-    return found
+                if is_stain:
+                    c["soft_px"] |= comp
+
+
+def die_verdict(center_hit: bool, area_ratio: float) -> str:
+    """다이 판정 (docs/specs/die-verdict.md). 재검사는 회생 가능할 수 있어 사람이 정한다."""
+    if center_hit or area_ratio >= DEFECT_AREA_RATIO:
+        return "defect"
+    return "recheck" if area_ratio > 0 else "normal"
+
+
+def link_defects(crops: dict, P: int, shape: tuple) -> tuple[list[dict], dict]:
+    """다이별 조각을 웨이퍼 좌표에 놓고, 다이 경계(스크라이브)와 검사 제외 영역만 사이에 둔 조각을 하나로 잇는다.
+    결함 하나가 여러 다이에 걸칠 수 있다(2026-11-16 18:20 스크래치). 종류는 이은 전체 모양으로,
+    판정은 걸친 다이마다 낸다. 반환: 다이별 조각 목록(같은 결함은 obj 가 같다), {다이: 판정}."""
+    mm = WAFER_MODEL["pitch_mm"] / P
+    defect, soft, known = np.zeros(shape, bool), np.zeros(shape, bool), np.zeros(shape, bool)
+    for c in crops.values():
+        win = np.s_[c["y"]:c["y"] + P, c["x"]:c["x"] + P]
+        defect[win] |= c["pixels"]
+        soft[win] |= c["soft_px"]
+        known[win] |= c["mask"]
+    gap = max(int(round(UNSEEN_GAP_MM / mm)), SCRIBE_MARGIN + 2)    # 스크라이브 여백(px)은 최소 넘어 잇는다
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * gap + 1, 2 * gap + 1))
+    grown = defect | (~known & (cv2.dilate(defect.astype(np.uint8), k) > 0))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(grown.astype(np.uint8), connectivity=8)
+    band = int(round(EDGE_BAND_MM / mm))
+    found, parts, obj = [], {}, 0
+    for i in range(1, n):
+        x0, y0, bw, bh = stats[i, :4]
+        win = np.s_[y0:y0 + bh, x0:x0 + bw]
+        mine = (lab[win] == i) & defect[win]
+        ys, xs = np.nonzero(mine)
+        if not len(xs):
+            continue
+        (_, _), (w, h), _ = cv2.minAreaRect(np.column_stack([xs, ys]).astype(np.float32))
+        long_mm = max(w, h) * mm
+        kind = _kind(bool(soft[win][mine].any()), len(xs) * mm * mm, long_mm, max(w, h) / max(min(w, h), 1.0))
+        xs, ys, obj = xs + x0, ys + y0, obj + 1
+        for c in crops.values():
+            inside = (xs >= c["x"]) & (xs < c["x"] + P) & (ys >= c["y"]) & (ys < c["y"] + P)
+            if not inside.any():
+                continue
+            px, py = xs[inside] - c["x"], ys[inside] - c["y"]
+            center = bool(((px >= band) & (px < P - band) & (py >= band) & (py < P - band)).any())
+            did = c["die"]["id"]
+            p = parts.setdefault(did, [0, False])
+            p[0] += int(inside.sum())
+            p[1] = p[1] or center
+            found.append({"die": did, "type": kind, "obj": obj,
+                          "x_mm": round(float((xs[inside].mean() - R.GRID_DIES / 2 * P) * mm), 2),
+                          "y_mm": round(float((R.GRID_DIES / 2 * P - ys[inside].mean()) * mm), 2),
+                          "area_mm2": round(float(inside.sum()) * mm * mm, 2), "length_mm": round(float(long_mm), 2),
+                          "center": center})
+    verdicts = {}
+    for did in crops:
+        area_px, center = parts.get(did, (0, False))
+        ratio = area_px / (P * P)
+        verdicts[did] = {"verdict": die_verdict(center, ratio), "center": center, "area_ratio": round(ratio, 4)}
+    return found, verdicts
 
 
 def quadrat_values(crops: dict, found: list[dict], P: int, per_die: int = 2) -> dict:
@@ -347,12 +406,9 @@ def detect_rectified(img: np.ndarray, valid: np.ndarray, P: int, per_die: int = 
         raise ValueError(f"검사 가능한 다이가 {len(crops)}개뿐입니다. 기준 다이를 만들려면 8개 이상 필요합니다.")
     align(crops, P, golden)
     noise = analyse(crops, P, golden)
-    found = extract(crops, P, noise, min_area_mm2, sharp_z, dark_only)
-    counts: dict[int, dict] = {}
-    for d in found:
-        counts.setdefault(d["die"], {}).setdefault(d["type"], 0)
-        counts[d["die"]][d["type"]] += 1
-    return {"inspected": sorted(crops), "defects": found, "die_counts": counts, "pitch_px": P,
+    extract(crops, P, noise, min_area_mm2, sharp_z, dark_only)
+    found, verdicts = link_defects(crops, P, img.shape[:2])
+    return {"inspected": sorted(crops), "defects": found, "verdicts": verdicts, "pitch_px": P,
             "noise": {k: round(v, 5) for k, v in noise.items() if k != "reference"},
             "shift_px": round(float(np.max([np.hypot(*c["shift"]) for c in crops.values()])), 2),
             "quadrats": quadrat_values(crops, found, P, per_die)}

@@ -103,5 +103,26 @@ class ScanPath(unittest.TestCase):
         self.assertTrue(r["belief"]["checks"])
 
 
+class WaferVerdict(unittest.TestCase):
+    # docs/specs/die-verdict.md: 패턴 또는 불량 다이 10 % → 불량, 재검사 다이·의심 → 재검사, 그 밖 양품
+    def stats(self, defect=0, recheck=0):
+        return {"active": 40, "normal": 40 - defect - recheck, "defect": defect, "recheck": recheck}
+
+    def test_rules(self):
+        self.assertEqual(engine._wafer(["Donut"], self.stats(1), None)["verdict"], "fail")
+        self.assertEqual(engine._wafer([], self.stats(4), None)["verdict"], "fail")          # 10 %
+        self.assertEqual(engine._wafer([], self.stats(3, 2), None)["verdict"], "recheck")
+        self.assertEqual(engine._wafer([], self.stats(3), {"name": "Scratch", "score": 0.6})["verdict"], "recheck")
+        self.assertEqual(engine._wafer([], self.stats(3), None)["verdict"], "pass")
+
+    def test_recheck_die_is_not_model_input(self):
+        defects = {d["id"]: {"particle": 1, "scratch": 0, "stain": 0} for d in DIES if d["zone"] == "edge"}
+        as_defect = engine.analyze(DIES, WAFER_MODEL, defects)
+        as_recheck = engine.analyze(DIES, WAFER_MODEL, defects, verdicts={i: "recheck" for i in defects})
+        self.assertIn("Edge-Ring", as_defect["labels"])
+        self.assertEqual(as_recheck["labels"], [])
+        self.assertEqual(as_recheck["wafer"]["verdict"], "recheck")
+
+
 if __name__ == "__main__":
     unittest.main()

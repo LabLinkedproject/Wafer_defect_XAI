@@ -14,7 +14,7 @@ import scan_config
 import wafer_model
 import wafer_stitch
 from . import cnn, engine, scan_input, scenarios, scoring
-from .knowledge import CHECKS, DEFECT_TYPES, PATTERNS
+from .knowledge import CHECKS, PATTERNS
 
 FEEDBACK_FILE = "adc_feedback.jsonl"
 SCAN_ROOT = os.path.join("captures", "scans")
@@ -30,6 +30,8 @@ class Session:
         self.detection = None
         self.quadrats: dict[tuple, float] = {}
         self.defects: dict[int, dict] = {}
+        self.verdicts: dict[int, str] = {}        # 검출 판정
+        self.overrides: dict[int, str] = {}       # 사람이 확정한 판정 (재검사 → 정상/불량, Z플랜)
         self.answers: list[dict] = []
         self.edited = False
         self.target = None
@@ -58,6 +60,7 @@ class Session:
             _, dies = self._model()
             self.source, self.scenario, self.scan_id, self.detection, self.quadrats = "scenario", name, None, None, {}
             self.defects = scenarios.generate(name, dies)
+            self.verdicts, self.overrides = {}, {}
             self.answers, self.edited, self.target = [], False, None
             self._invalidate()
 
@@ -68,30 +71,25 @@ class Session:
             self.source, self.scan_id, self.detection = "scan", det["scan"], det
             self.defects = scan_input.die_defects(det)
             self.quadrats = scan_input.quadrats(det)
+            self.verdicts, self.overrides = scan_input.die_verdicts(det), {}
             self.answers, self.edited, self.target = [], False, None
             self._invalidate()
 
-    def set_die(self, die_id: int, dtype: str | None, count: int):
+    def set_die(self, die_id: int, verdict: str | None):
+        """사람이 다이 판정을 확정한다 (normal|defect). None 이면 검출 판정으로 되돌린다."""
         with self._lock:
             _, dies = self._model()
-            if die_id not in {d["id"] for d in dies}:
+            if die_id not in {d["id"] for d in dies} or verdict not in (None, "normal", "defect"):
                 raise KeyError(die_id)
-            if dtype is None or count <= 0:
-                self.defects.pop(die_id, None)
+            if verdict is None:
+                self.overrides.pop(die_id, None)
             else:
-                if dtype not in DEFECT_TYPES:
-                    raise KeyError(dtype)
-                self.defects[die_id] = {t: (count if t == dtype else 0) for t in DEFECT_TYPES}
-            if self.source == "scan":
-                # 엔지니어가 고친 다이는 구역 넷 모두 그 정도로 본다
-                self.quadrats = {k: v for k, v in self.quadrats.items() if k[0] != die_id}
-                w = scoring.die_weight(self.defects.get(die_id, {}))
-                for qr in range(2):
-                    for qc in range(2):
-                        if w:
-                            self.quadrats[(die_id, qr, qc)] = w
-            self.edited = True
+                self.overrides[die_id] = verdict
+            self.edited = bool(self.overrides)
             self._invalidate()
+
+    def die_verdicts(self) -> dict[int, str]:
+        return {**self.verdicts, **self.overrides} if self.source == "scan" else {}
 
     def answer(self, check_id: str, answer: str):
         with self._lock:
@@ -116,11 +114,14 @@ class Session:
         with self._lock:
             if self._cache is None:
                 spec, dies = self._model()
-                model = None
+                model, verdicts = None, self.die_verdicts()
                 if self.source == "scan" and cnn.available():
-                    model = cnn.Model(dies, self.quadrats, scoring.RuleModel(dies, {k: v for k, v in self.defects.items()
-                                                                                 if sum(v.values())}))
-                r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model)
+                    # 패턴 모델 입력은 불량 다이만 (재검사는 정상 취급). 사람이 불량으로 확정한 다이는 다이 전체로 넣는다
+                    bad = {i for i, v in verdicts.items() if v == "defect"}
+                    q = {k: v for k, v in self.quadrats.items() if k[0] in bad}
+                    q.update({(i, a, b): 1.0 for i in bad - {k[0] for k in q} for a in range(2) for b in range(2)})
+                    model = cnn.Model(dies, q, scoring.RuleModel(dies, {k: v for k, v in self.defects.items() if k in bad}))
+                r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model, verdicts or None)
                 sess = {"source": self.source, "scenario": self.scenario, "edited": self.edited,
                         "scenario_name": scenarios.SCENARIOS[self.scenario]["name"],
                         "scenario_note": scenarios.SCENARIOS[self.scenario]["note"],
@@ -130,6 +131,10 @@ class Session:
                     sess.update(scan_id=self.scan_id, scan_name=scan_input.label(self.scan_id),
                                 inspected=len(det["inspected"]), found=len(det["defects"]))
                     r["found"] = det["defects"]
+                    # 다이 상세에 판정 근거(중심부 침범·면적)와 사람 확정 여부를 보인다
+                    r["die_verdicts"] = {int(k): {**v, "verdict": verdicts.get(int(k), v["verdict"]),
+                                                  "by": "operator" if int(k) in self.overrides else "detect"}
+                                         for k, v in det.get("verdicts", {}).items()}
                     r["wafer_map"] = scan_input.map_meta(self.scan_id)
                 else:
                     r["found"] = []
@@ -157,6 +162,8 @@ class Session:
                    "model": st["model"]["kind"], "edited": self.edited, "verdict": verdict, "ai_labels": st["labels"],
                    "operator_labels": labels, "operator_cause": cause, "note": note[:500],
                    "die_defects": {str(k): v for k, v in self.defects.items()},
+                   "die_verdicts": {str(k): v for k, v in self.die_verdicts().items()},
+                   "operator_dies": {str(k): v for k, v in self.overrides.items()},
                    "detections": st.get("found", []),
                    "answers": self.answers}
             with open(FEEDBACK_FILE, "a") as f:

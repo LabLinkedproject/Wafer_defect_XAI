@@ -20,6 +20,8 @@
   --normal: #e2e6e9;
   --light: #b78300;   /* 흰 바탕 대비 3.4:1 (비텍스트 3:1 기준) */
   --heavy: #c13f2c;
+  --defect: var(--heavy);
+  --recheck: var(--light);
   /* 결함 종류 */
   --particle: #1c6d88;
   --scratch: #ad3159;
@@ -230,6 +232,7 @@ details.panel > summary .pos { margin-left: auto; font-weight: 400; font-size: 0
   display: grid; grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); gap: 1rem 2rem; align-items: center;
   padding: 1.6rem 2rem; border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); background: var(--paper);
 }
+.wv-pass { color: var(--good); } .wv-fail { color: var(--bad); } .wv-recheck { color: var(--warn); }
 .verdict h2 { font-size: 2.6rem; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
 #verdict-sub { color: var(--ink-2); font-size: 0.92rem; margin-top: 0.3rem; }
 .labels { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.55rem; }

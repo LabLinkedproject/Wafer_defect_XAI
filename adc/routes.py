@@ -36,9 +36,9 @@ def create_adc_blueprint() -> Blueprint:
     def die():
         d = body()
         try:
-            s.set_die(int(d["id"]), d.get("type"), int(d.get("count", 0)))
+            s.set_die(int(d["id"]), d.get("verdict"))
         except (KeyError, TypeError, ValueError):
-            return bad("다이 id, 유형, 개수를 확인하세요")
+            return bad("다이 id 와 판정(normal / defect)을 확인하세요")
         return jsonify(s.state())
 
     @bp.route("/api/adc/answer", methods=["POST"])
