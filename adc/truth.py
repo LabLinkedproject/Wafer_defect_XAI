@@ -113,6 +113,44 @@ def compare(scan_id: str, truth: dict | None = None) -> dict | None:
     return out
 
 
+# ── 평가 기록 (화면에는 내지 않고 데이터로만 남긴다) ────────────────
+EVAL_LOG = "evaluation.jsonl"          # 스캔 폴더들의 상위(captures/scans)에 누적
+
+
+def _write_json(path: str, data: dict):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def record(scan_id: str) -> dict | None:
+    """정답이 있는 스캔의 혼동행렬(다이 단위 TP·FN·FP·TN)을 truth.json 과 누적 파일에 남긴다.
+    사용자 요청(2026-11-16): 결과 화면에는 표기하지 않고, 나중에 꺼내 그림으로 만들 수 있게 데이터로만 저장."""
+    t = load(scan_id)
+    if t is None:
+        return None
+    c = compare(scan_id, t)
+    det = scan_input.detect(scan_id)
+    ev = {"time": datetime.now().isoformat(timespec="seconds"), "scan": os.path.basename(scan_id), "stage": t["stage"],
+          "tp": len(c["tp"]), "fn": len(c["fn"]), "fp": len(c["fp"]), "tn": c["tn"],
+          "dies": {"tp": c["tp"], "fn": c["fn"], "fp": c["fp"], "not_inspected": c["not_inspected"]},
+          "type_match": len(c["type_match"]), "patterns": t["patterns"], "judged": t.get("judged", []),
+          "channel": det.get("channel"), "reference": det.get("reference"), "detect_version": det.get("version")}
+    if c.get("counts"):
+        ev["counts"] = c["counts"]
+    t["evaluation"] = ev
+    _write_json(_path(scan_id), t)
+    log = os.path.join(os.path.dirname(scan_input.scan_dir(scan_id)), EVAL_LOG)
+    with open(log, "a") as f:
+        f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    return ev
+
+
 # ── 단계별 집계 ─────────────────────────────────────────────────
 TARGET = {1: 20, 2: 3, 3: 2}     # 1단계: 종류당 결함 다이 수, 2단계: 패턴당 스캔 수, 3단계: 조합당 스캔 수
 

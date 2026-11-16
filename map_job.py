@@ -57,7 +57,10 @@ def main() -> int:
         say("phase", "detect")
         say("log", "결함 검출")
         try:
-            scan_input.detect(os.path.basename(scan_dir.rstrip("/")))   # 분석 화면이 바로 쓰도록 미리 계산
+            sid = os.path.basename(scan_dir.rstrip("/"))
+            scan_input.detect(sid)                                      # 분석 화면이 바로 쓰도록 미리 계산
+            from adc import truth
+            truth.record(sid)                                           # 정답이 있으면 혼동행렬을 데이터로 남긴다
         except Exception as e:                                          # 맵은 이미 저장됐다. 분석 화면이 다시 시도한다
             say("log", f"결함 검출 실패 ({e})")
     except Exception as e:

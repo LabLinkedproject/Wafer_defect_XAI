@@ -88,6 +88,7 @@ def create_adc_blueprint() -> Blueprint:
         sid = str(b.get("scan", ""))
         try:
             t = truth.save(sid, b)
+            truth.record(sid)                      # 혼동행렬은 데이터로만 남긴다
             return jsonify({"success": True, "truth": t, "compare": truth.compare(sid, t)})
         except KeyError:
             return bad("스캔을 찾을 수 없습니다")
