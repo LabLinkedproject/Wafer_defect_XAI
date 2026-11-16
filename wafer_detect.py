@@ -33,6 +33,7 @@ MIN_STAIN_CONTRAST = 0.02
 MIN_SHARP_AREA = 5            # px
 MIN_STAIN_RATIO = 0.012       # 다이 면적 대비
 STAIN_MIN_AREA_MM2 = 30.0     # 선명한 덩어리도 이 크기 이상이면 스테인. 2026-11-16 실물: 파티클 최대 28.3, 스테인 최소 32.3 mm²
+STAIN_MIN_LENGTH_MM = 10.0    # 또는 이 길이 이상 (길쭉한 스크래치 제외). 파티클 최대 8.9, 스테인 최소 9.3 mm
 UNSEEN_GAP_MM = 2.0           # 검사 제외 띠 양쪽에서 이만큼 뻗어 조각을 잇는다. 2026-11-16 실물 두 스캔에서 0·1.5·2·2.5·3 mm 중 개수 정확도 최고
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
@@ -40,6 +41,8 @@ HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
 HEAVY_QUADRAT_COUNT = 3
 LINE_GUARD_MM = 5.0           # 다이 경계선에서 이 거리 안의 가는 성분은 격자선 잔차
 LINE_RESIDUAL_ELONGATION = 3.0
+CORNER_GUARD_MM = 4.0         # 다이 모서리(두 경계선 모두)에서 이 거리 안의 작은 점은 격자선 교차점 잔차
+CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 어긋남이 1~4.5 mm² 점 9개로 남았다
 GROW_RATIO = 0.6              # 이중 문턱의 낮은 쪽 (높은 문턱 대비)
 DARK_BACKGROUND = 120          # 격자선 밝기 정보가 없는 예전 맵: 웨이퍼 안쪽 중앙값이 이보다 어두우면 투명 앞면
 CHROMA_GAIN = 3.0             # R−B 차이를 밝기 영상 범위로 늘리는 배율
@@ -206,13 +209,29 @@ def _components(mask: np.ndarray, min_area: int, valid: np.ndarray | None = None
 
 
 def _grid_residual(xs, ys, w, h, area_mm2, P, mm) -> bool:
-    """다이 경계선 옆 띠 안에 갇힌 길쭉한 성분은 격자선 위치 차이가 남은 것으로 본다.
+    """다이 경계선 옆 띠 안에 갇힌 길쭉한 성분과 모서리의 작은 점은 격자선 위치 차이가 남은 것으로 본다.
     격자선이 다이마다 조금씩 어긋나 있으면 기준 다이와 비교할 때 선이 결함처럼 남는다."""
     guard = LINE_GUARD_MM / mm
     near_x = min(xs.min(), P - 1 - xs.max()) < guard and np.ptp(xs) < guard     # 세로 경계선 옆
     near_y = min(ys.min(), P - 1 - ys.max()) < guard and np.ptp(ys) < guard     # 가로 경계선 옆
     along = max(w, h) >= LINE_RESIDUAL_ELONGATION * max(min(w, h), 1.0)     # 경계선 방향으로 길쭉함
-    return (near_x or near_y) and (along or area_mm2 < 1.0)
+    # 사진 이음매에서 교차점이 어긋나면 모서리에 작은 점이 남는다.
+    # shortcut: 모서리 4 mm 안의 5 mm² 미만 실제 파티클도 빠진다. 맵 합성 정렬이 나아지면 없앤다
+    cg = CORNER_GUARD_MM / mm
+    cx, cy = xs.mean(), ys.mean()
+    corner = min(cx, P - 1 - cx) < cg and min(cy, P - 1 - cy) < cg and area_mm2 < CORNER_MAX_AREA_MM2
+    return corner or (near_x or near_y) and (along or area_mm2 < 1.0)
+
+
+def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:
+    """결함 종류. 번짐 채널이거나, 선명해도 크거나 긴(길쭉하지 않은) 덩어리는 스테인이다.
+    길이 기준: 반사 마스크에 반쯤 가린 스테인은 면적이 26.8 mm² 로 줄었지만 길이는 14.8 mm 였다(2026-11-16 17:41).
+    파티클은 지금까지 최대 8.9 mm."""
+    if soft:
+        return "stain"
+    if elong >= SCRATCH_ELONGATION:
+        return "scratch" if long_mm >= SCRATCH_MIN_MM else "particle"
+    return "stain" if area_mm2 >= STAIN_MIN_AREA_MM2 or long_mm >= STAIN_MIN_LENGTH_MM else "particle"
 
 
 def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z: float = SHARP_Z,
@@ -249,10 +268,7 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
                 elong = max(w, h) / short
                 if not is_stain and _grid_residual(xs, ys, w, h, area * mm * mm, P, mm):
                     continue
-                if is_stain or area * mm * mm >= STAIN_MIN_AREA_MM2 and elong < SCRATCH_ELONGATION:
-                    kind = "stain"
-                else:
-                    kind = "scratch" if elong >= SCRATCH_ELONGATION and long_mm >= SCRATCH_MIN_MM else "particle"
+                kind = _kind(is_stain, area * mm * mm, long_mm, elong)
                 x_mm = (c["x"] + xs.mean() - R.GRID_DIES / 2 * P) * mm
                 y_mm = (R.GRID_DIES / 2 * P - c["y"] - ys.mean()) * mm
                 found.append({"die": c["die"]["id"], "type": kind, "x_mm": round(float(x_mm), 2), "y_mm": round(float(y_mm), 2),

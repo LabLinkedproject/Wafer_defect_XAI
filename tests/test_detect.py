@@ -61,6 +61,25 @@ class Detect(unittest.TestCase):
         r = W.detect_array(g, meta)
         self.assertEqual({d["type"] for d in r["defects"] if d["die"] == 20}, {"stain"})
 
+    def test_kind_rules(self):
+        self.assertEqual(W._kind(False, 4.0, 2.5, 1.2), "particle")
+        self.assertEqual(W._kind(False, 26.8, 14.8, 2.1), "stain")      # 반사 마스크에 반쯤 가린 스테인 (길이로)
+        self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 면적으로
+        self.assertEqual(W._kind(False, 12.0, 20.0, 6.0), "scratch")    # 길쭉하면 길어도 스크래치
+        self.assertEqual(W._kind(True, 5.0, 3.0, 1.0), "stain")         # 번짐 채널
+
+    def test_small_dot_at_die_corner_is_grid_residual(self):
+        # 2026-11-16 17:41 실물: 사진 이음매에서 격자선 교차점이 어긋나 다이 모서리마다 작은 점이 오검출됐다
+        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)   # 실물 투명 앞면 설정
+        mm = P / 32
+        a, b = R.die_slot(die_at(20))
+        g, meta = clean_map()
+        cv2.circle(g, (int(b * P + 2.5 * mm), int(a * P + P - 2.5 * mm)), 5, 60, -1)    # 왼쪽 아래 모서리에서 2.5 mm
+        self.assertEqual(W.detect_array(g, meta, **front)["defects"], [])
+        g, meta = clean_map()
+        cv2.circle(g, (b * P + 85, a * P + 85), 5, 60, -1)                              # 같은 점이 가운데면 센다
+        self.assertEqual([d["type"] for d in W.detect_array(g, meta, **front)["defects"]], ["particle"])
+
     def test_pieces_split_only_by_unseen_band_are_one(self):
         # 2026-11-16 실물: 카메라 반사 자리(검사 제외)가 스테인을 갈라 안쪽 조각이 따로 세어졌다
         mask = np.zeros((100, 100), bool)
