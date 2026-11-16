@@ -21,7 +21,7 @@ import time
 import cv2
 import numpy as np
 
-from wafer_model import WAFER_MODEL
+from wafer_model import WAFER_MODEL, die_layout
 
 WORK_SCALE = 0.5           # 카메라 모델 측정용 축소
 SIGMA_RATIO = 0.24         # 합성 가중치 폭 (영상 높이 대비)
@@ -66,7 +66,7 @@ def glare_mask(light: np.ndarray, saturated: np.ndarray | None = None) -> np.nda
     return cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
 
 
-def lens_mask(raw: np.ndarray, glare: np.ndarray, px_per_mm: float | None = None) -> np.ndarray:
+def lens_mask(raw: np.ndarray, glare: np.ndarray, px_per_mm: float | None = None, fill: bool = False) -> np.ndarray:
     """카메라 자신의 반사 (사진 좌표). raw 는 보정 전 사진들의 픽셀별 중앙값이다.
     투명·거울면을 바로 위에서 찍으면 렌즈와 카메라 기판이 광축 자리(사진 가운데)에 비친다(2026-11-14 근접 촬영).
     사진마다 장면은 움직이므로 중앙값에 남은 무늬는 카메라에 붙은 것이다. 다이 간격으로 찍으면 격자선도 남으므로
@@ -89,6 +89,8 @@ def lens_mask(raw: np.ndarray, glare: np.ndarray, px_per_mm: float | None = None
     # 무늬는 모든 다이의 같은 자리에 있어 기준 다이 비교에서도 상쇄된다
     for i in near:
         out[lab == i] = 1
+    if fill and near:                            # 화면용: 렌즈 원과 기판 테두리를 한 덩어리로 채운다
+        cv2.fillConvexPoly(out, cv2.convexHull(np.argwhere(out > 0)[:, ::-1].astype(np.int32)), 1)
     r = max(3, int(round((px_per_mm or h / 40) * LENS_MARGIN_MM)))
     return cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
 
@@ -556,7 +558,9 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     if halo.mean() < 0.01:
         halo[:] = False
     sat_glare = glare.copy()             # 포화된 반사만 (최종 맵은 이것만 빼고 모두 담는다)
-    lens = lens_mask(np.median(np.stack(small), 0), glare, scale_hint * WORK_SCALE if scale_hint else None)
+    raw_med = np.median(np.stack(small), 0)
+    lens = lens_mask(raw_med, glare, scale_hint * WORK_SCALE if scale_hint else None)
+    lens_fill = lens_mask(raw_med, glare, scale_hint * WORK_SCALE if scale_hint else None, fill=True)
     if lens.any():
         log(f"카메라 자신의 반사(사진 가운데) {lens.mean() * 100:.1f}% 를 가림")
         glare = glare | lens
@@ -670,18 +674,25 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     out[~mask] = (18, 18, 20)
     detect_img = out.copy()                  # 검출용은 채우지 않는다: 채운 자리 경계가 어둡게 읽혀 오검출이 났다(2026-11-16)
     if wafer:
-        # 웨이퍼 안의 미촬영 자리(모든 사진에서 조명이 포화된 다이 모서리)는 검게 두면 결함처럼 보인다(2026-11-16).
-        # 화면용으로 주변 색을 번지게 채운다. 검출은 촬영 범위 마스크로 계속 뺀다
-        yy_, xx_ = np.mgrid[0:SZ[0], 0:SZ[1]].astype(np.float32)
-        inside = np.hypot(xx_ - wafer["cx"] * out_scale, yy_ - wafer["cy"] * out_scale) < wafer["r"] * out_scale * 0.97
-        hole = inside & ~mask
+        # 화면용 맵은 카메라 반사(렌즈·기판)·조명 번짐·미촬영 자리를 지우고 주변 웨이퍼 결로 이어 메운다(인페인팅).
+        # 사용자 요청(2026-11-16): 결함 없는 웨이퍼 결과가 깨끗하게 보이도록. 검출용 맵·마스크는 그대로다
+        _, den_view = _compose(zeros, lc, cpos, Ac, S, SZ, kc, gains, glare=to_c(glare | halo | lens_fill))
+        # 메우는 범위는 검사 다이 44개의 칸 안으로만 (다이 밖 가장자리까지 메우면 줄무늬로 번졌다)
+        sx_ = 1 if int((man.get("config") or {}).get("wafer_sign_x", 1)) >= 0 else -1
+        sy_ = 1 if int((man.get("config") or {}).get("wafer_sign_y", 1)) >= 0 else -1
+        half = WAFER_MODEL["pitch_mm"] / 2 * S
+        inside = np.zeros(SZ, bool)
+        for dd in die_layout():
+            px_ = wafer["cx"] * out_scale + sx_ * dd["x_mm"] * S
+            py_ = wafer["cy"] * out_scale - sy_ * dd["y_mm"] * S
+            y0_, y1_ = max(0, int(py_ - half)), min(SZ[0], int(py_ + half))
+            x0_, x1_ = max(0, int(px_ - half)), min(SZ[1], int(px_ + half))
+            inside[y0_:y1_, x0_:x1_] = True
+        hole = inside & ~(den_view > 0.02)
         if hole.any():
-            known = mask.astype(np.float32)
-            sig = max(3.0, 4.0 * S)                       # 약 4 mm
-            num = cv2.GaussianBlur(out.astype(np.float32) * known[..., None], (0, 0), sig)
-            w = cv2.GaussianBlur(known, (0, 0), sig)[..., None]
-            fill = np.clip(num / np.maximum(w, 1e-3), 0, 255).astype(np.uint8)
-            out[hole] = fill[hole]
+            hole_u8 = cv2.dilate(hole.astype(np.uint8), np.ones((5, 5), np.uint8))
+            out = cv2.inpaint(out, hole_u8, max(3, int(round(S))), cv2.INPAINT_TELEA)
+            log(f"화면용 맵: 반사·미촬영 자리 {float(hole.mean()) * 100:.1f}% 를 주변 결로 메움")
     name = "wafer_map.jpg"
     # 색 정보를 줄이지 않고(4:4:4) 저장한다. 투명면 검출은 색 차이를 쓰므로 색이 8×8 블록으로 뭉개지면 안 된다
     if flip_y is None:
