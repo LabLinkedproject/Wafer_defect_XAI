@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from flask import Blueprint, Response, jsonify, request
 
+from . import truth
 from .knowledge import PATTERNS
 from .session import Session
 
@@ -70,6 +71,28 @@ def create_adc_blueprint() -> Blueprint:
     def target():
         s.set_target(body().get("target"))
         return jsonify(s.state())
+
+    @bp.route("/api/adc/truth")
+    def truth_get():
+        sid = request.args.get("scan", "")
+        try:
+            t = truth.load(sid)
+            return jsonify({"success": True, "truth": t, "compare": truth.compare(sid, t) if t else None,
+                            "stages": truth.STAGES})
+        except KeyError:
+            return bad("스캔을 찾을 수 없습니다")
+
+    @bp.route("/api/adc/truth", methods=["POST"])
+    def truth_save():
+        b = body()
+        sid = str(b.get("scan", ""))
+        try:
+            t = truth.save(sid, b)
+            return jsonify({"success": True, "truth": t, "compare": truth.compare(sid, t)})
+        except KeyError:
+            return bad("스캔을 찾을 수 없습니다")
+        except ValueError as e:
+            return bad(str(e))
 
     @bp.route("/api/adc/feedback", methods=["POST"])
     def feedback():
