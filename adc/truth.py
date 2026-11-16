@@ -52,8 +52,17 @@ def clean(data: dict) -> dict:
         raise ValueError(f"알 수 없는 패턴: {', '.join(bad)}")
     # 저장 시점의 AI 패턴 판정 (집계 때 모델을 다시 돌리지 않도록)
     judged = sorted({str(p) for p in data.get("judged") or [] if str(p) in PATTERNS})
-    return {"stage": stage, "dies": dies, "patterns": patterns, "judged": judged,
-            "note": str(data.get("note") or "")[:500]}
+    # 선택: 다이별 결함 개수 {다이: {종류: 개수}} (1단계 단일 결함 수준 확인용)
+    counts = {}
+    for k, per in (data.get("counts") or {}).items():
+        if str(int(k)) not in dies:
+            raise ValueError(f"개수를 적은 다이 {k} 가 결함 다이 목록에 없습니다")
+        counts[str(int(k))] = {t: int(n) for t, n in per.items() if t in dies[str(int(k))] and int(n) > 0}
+    out = {"stage": stage, "dies": dies, "patterns": patterns, "judged": judged,
+           "note": str(data.get("note") or "")[:500]}
+    if counts:
+        out["counts"] = counts
+    return out
 
 
 def save(scan_id: str, data: dict) -> dict:
@@ -86,8 +95,22 @@ def compare(scan_id: str, truth: dict | None = None) -> dict | None:
     fp = sorted(d for d in inspected if d not in want and d in found)
     tn = sum(1 for d in inspected if d not in want and d not in found)
     type_ok = sorted(d for d in tp if want[d] & found[d])
-    return {"tp": tp, "fn": fn, "fp": fp, "tn": tn, "type_match": type_ok,
-            "not_inspected": sorted(d for d in want if d not in inspected)}
+    out = {"tp": tp, "fn": fn, "fp": fp, "tn": tn, "type_match": type_ok,
+           "not_inspected": sorted(d for d in want if d not in inspected)}
+    if truth.get("counts"):
+        n_found: dict[int, dict] = {}
+        for d in det["defects"]:
+            n_found.setdefault(int(d["die"]), {}).setdefault(d["type"], 0)
+            n_found[int(d["die"])][d["type"]] += 1
+        rows = []
+        for k, per in truth["counts"].items():
+            die = int(k)
+            if die in inspected:
+                for t, n in per.items():
+                    rows.append({"die": die, "type": t, "truth": n, "found": n_found.get(die, {}).get(t, 0)})
+        out["counts"] = {"rows": rows, "exact": sum(r["truth"] == r["found"] for r in rows),
+                         "truth_total": sum(r["truth"] for r in rows), "found_total": sum(r["found"] for r in rows)}
+    return out
 
 
 # ── 단계별 집계 ─────────────────────────────────────────────────
