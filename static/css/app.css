@@ -320,8 +320,8 @@ button.bar-row:hover, button.bar-row.sel { background: var(--blue-soft); }
 .check-a { display: flex; gap: 0.3rem; flex-wrap: wrap; }
 .converged { background: var(--blue-soft); border-radius: var(--radius); padding: 0.65rem 0.75rem; font-size: 0.9rem; margin-bottom: 0.5rem; }
 .trace { list-style: none; margin: 0; padding: 0; }
-.trace li { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 0.6rem; padding: 0.45rem 0 0.45rem 1rem; position: relative; font-size: 0.88rem; border-left: 2px solid var(--rule); margin-left: 0.3rem; }
-.trace li::before { content: ""; position: absolute; left: -0.4rem; top: 0.8rem; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--rule-2); }
+.trace li { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 0.6rem; padding: 0.45rem 0 0.45rem 1rem; position: relative; font-size: 0.88rem; margin-left: 0.3rem; background: linear-gradient(var(--rule), var(--rule)) 0 0 / 2px 100% no-repeat; }
+.trace li::before { content: ""; position: absolute; left: calc(1px - 0.3rem); top: 0.8rem; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--rule-2); }
 .trace li.update::before, .trace li.ask::before { background: var(--light); }
 .trace li.conclude::before { background: var(--blue); }
 .trace b { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
