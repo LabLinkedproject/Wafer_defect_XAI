@@ -53,6 +53,14 @@ class Detect(unittest.TestCase):
         r = W.detect_array(g, meta)
         self.assertIn("scratch", {d["type"] for d in r["defects"] if d["die"] == 25})
 
+    def test_large_dark_blob_is_stain(self):
+        # 2026-11-16 실물: 스테인은 선명한 큰 얼룩(32 mm² 이상), 파티클은 28 mm² 이하였다
+        g, meta = clean_map()
+        a, b = R.die_slot(die_at(20))
+        cv2.ellipse(g, (b * P + 85, a * P + 80), (26, 19), 20, 0, 360, 60, -1)   # 약 55 mm²
+        r = W.detect_array(g, meta)
+        self.assertEqual({d["type"] for d in r["defects"] if d["die"] == 20}, {"stain"})
+
     def test_coordinates_are_in_mm(self):
         g, meta = clean_map()
         d = die_at(20)

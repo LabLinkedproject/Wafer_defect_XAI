@@ -32,6 +32,7 @@ MIN_CONTRAST = 0.05           # 맵 합성 잔차보다 작은 밝기 차이는 
 MIN_STAIN_CONTRAST = 0.02
 MIN_SHARP_AREA = 5            # px
 MIN_STAIN_RATIO = 0.012       # 다이 면적 대비
+STAIN_MIN_AREA_MM2 = 30.0     # 선명한 덩어리도 이 크기 이상이면 스테인. 2026-11-16 실물: 파티클 최대 28.3, 스테인 최소 32.3 mm²
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
 HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
@@ -238,7 +239,10 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
                 elong = max(w, h) / short
                 if not is_stain and _grid_residual(xs, ys, w, h, area * mm * mm, P, mm):
                     continue
-                kind = "stain" if is_stain else ("scratch" if elong >= SCRATCH_ELONGATION and long_mm >= SCRATCH_MIN_MM else "particle")
+                if is_stain or area * mm * mm >= STAIN_MIN_AREA_MM2 and elong < SCRATCH_ELONGATION:
+                    kind = "stain"
+                else:
+                    kind = "scratch" if elong >= SCRATCH_ELONGATION and long_mm >= SCRATCH_MIN_MM else "particle"
                 x_mm = (c["x"] + xs.mean() - R.GRID_DIES / 2 * P) * mm
                 y_mm = (R.GRID_DIES / 2 * P - c["y"] - ys.mean()) * mm
                 found.append({"die": c["die"]["id"], "type": kind, "x_mm": round(float(x_mm), 2), "y_mm": round(float(y_mm), 2),
