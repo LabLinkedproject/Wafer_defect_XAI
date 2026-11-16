@@ -61,6 +61,15 @@ class Detect(unittest.TestCase):
         r = W.detect_array(g, meta)
         self.assertEqual({d["type"] for d in r["defects"] if d["die"] == 20}, {"stain"})
 
+    def test_pieces_split_only_by_unseen_band_are_one(self):
+        # 2026-11-16 실물: 카메라 반사 자리(검사 제외)가 스테인을 갈라 안쪽 조각이 따로 세어졌다
+        mask = np.zeros((100, 100), bool)
+        mask[40:60, 20:40] = mask[40:60, 50:70] = True          # 10 px 떨어진 두 조각
+        unseen = np.ones((100, 100), bool)
+        unseen[:, 40:50] = False                                  # 사이가 검사 제외 띠
+        self.assertEqual(len(W._components(mask, 1, unseen, gap=6)), 1)
+        self.assertEqual(len(W._components(mask, 1, np.ones((100, 100), bool), gap=6)), 2)   # 사이가 보이면 둘
+
     def test_coordinates_are_in_mm(self):
         g, meta = clean_map()
         d = die_at(20)

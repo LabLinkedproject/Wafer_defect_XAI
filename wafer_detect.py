@@ -33,6 +33,7 @@ MIN_STAIN_CONTRAST = 0.02
 MIN_SHARP_AREA = 5            # px
 MIN_STAIN_RATIO = 0.012       # 다이 면적 대비
 STAIN_MIN_AREA_MM2 = 30.0     # 선명한 덩어리도 이 크기 이상이면 스테인. 2026-11-16 실물: 파티클 최대 28.3, 스테인 최소 32.3 mm²
+UNSEEN_GAP_MM = 2.0           # 검사 제외 띠 양쪽에서 이만큼 뻗어 조각을 잇는다. 2026-11-16 실물 두 스캔에서 0·1.5·2·2.5·3 mm 중 개수 정확도 최고
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
 HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
@@ -190,9 +191,18 @@ def analyse(crops: dict, P: int, golden: dict | None = None) -> dict:
     return {"sharp_sigma": s1, "soft_sigma": s2, "reference": ref}
 
 
-def _components(mask: np.ndarray, min_area: int):
-    n, lab, stats, cen = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
-    return [(lab == i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= min_area]
+def _components(mask: np.ndarray, min_area: int, valid: np.ndarray | None = None, gap: int = 0):
+    """연결 성분. valid 와 gap 을 주면 검사 제외 영역(카메라 반사 자리)만 사이에 둔 조각은 하나로 합친다.
+    2026-11-16 실물: U 자 반사 마스크가 스테인을 갈라 안쪽 조각이 다이마다 같은 자리에 따로 세어졌다.
+    shortcut: 보이지 않는 영역 안에서 gap*2 이내로 떨어진 두 결함도 하나로 센다. 사이를 볼 수 없어서다."""
+    grown = mask
+    if valid is not None and gap > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * gap + 1, 2 * gap + 1))
+        grown = mask | (~valid & (cv2.dilate(mask.astype(np.uint8), k) > 0))
+    n, lab = cv2.connectedComponents(grown.astype(np.uint8), connectivity=8)
+    lab[~mask] = 0
+    areas = np.bincount(lab.ravel(), minlength=n)
+    return [(lab == i, areas[i]) for i in range(1, n) if areas[i] >= min_area]
 
 
 def _grid_residual(xs, ys, w, h, area_mm2, P, mm) -> bool:
@@ -229,7 +239,7 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
         # 번짐 지도는 흐림을 거치므로 선명한 결함 둘레에도 반응한다. 그 둘레는 번짐 결함에서 뺀다
         halo = cv2.dilate(sharp.astype(np.uint8), np.ones((2 * (P // 14) + 1,) * 2, np.uint8)) > 0
         for region, kind_min, is_stain in ((sharp, MIN_SHARP_AREA, False), (soft & ~halo, stain_min, True)):
-            for comp, area in _components(region, kind_min):
+            for comp, area in _components(region, kind_min, c["mask"], int(round(UNSEEN_GAP_MM / mm))):
                 if area * mm * mm < min_area_mm2:
                     continue
                 ys, xs = np.where(comp)
