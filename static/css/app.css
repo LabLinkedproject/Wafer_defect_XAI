@@ -34,7 +34,7 @@
   --text: var(--ink);
   --card: var(--paper);
   --radius: 3px;
-  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --mono: "JetBrains Mono", "Noto Sans KR", ui-monospace, Consolas, monospace;  /* 한글은 Noto 로 */
   --sans: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   color-scheme: light;
 }
@@ -83,7 +83,7 @@ a { color: var(--blue); text-underline-offset: 0.18em; }
 }
 .index a {
   display: flex; align-items: center; gap: 0.55rem; padding: 0.55rem 1rem; min-width: 0;
-  color: var(--ink); text-decoration: none; font-weight: 700; font-size: 0.88rem; border-right: 1px solid var(--rule);
+  color: var(--ink); text-decoration: none; font-weight: 700; font-size: 0.88rem; border-right: 1px solid var(--rule); white-space: nowrap;
 }
 .index a:last-child { border-right: 0; }
 .index a:hover { background: var(--paper-2); }
@@ -158,8 +158,8 @@ details.panel > summary .pos { margin-left: auto; font-weight: 400; font-size: 0
 .switch { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: var(--ink-2); cursor: pointer; }
 .switch input, .checks input { accent-color: var(--blue); }
 .segmented { display: inline-flex; border: 1px solid var(--rule-2); border-radius: var(--radius); overflow: hidden; }
-.segmented button { border: 0; border-right: 1px solid var(--rule); background: var(--paper); padding: 0.25rem 0.7rem; min-height: 1.95rem; font-size: 0.82rem; cursor: pointer; }
-.segmented button:last-child { border-right: 0; }
+.segmented button { border: 0; background: var(--paper); padding: 0.25rem 0.7rem; min-height: 1.95rem; font-size: 0.82rem; cursor: pointer; }
+.segmented button:not(:first-child) { border-left: 1px solid var(--rule); }
 .segmented button.on { background: var(--ink); color: var(--paper); font-weight: 700; }
 .segmented button:disabled { color: var(--rule-2); cursor: not-allowed; }
 .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.7rem; }
@@ -353,12 +353,12 @@ legend { font-size: 0.82rem; color: var(--muted); padding: 0; }
 .block.last details.panel:first-child { margin-top: 0; }
 .truth-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 0.6rem 0.9rem; align-items: end; }
 .truth-form .field { display: flex; flex-direction: column; align-items: stretch; gap: 0.25rem; }
-.truth-form input, .truth-form select { width: 100%; }
+.truth-form .field input, .truth-form .field select { width: 100%; }
 .truth-patterns { grid-column: 1 / -1; border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.4rem 0.6rem; background: var(--paper); }
 .truth-patterns label { margin-right: 0.9rem; white-space: nowrap; font-size: 0.86rem; }
 .truth-note { grid-column: span 2; }
 #truth-result b { color: var(--blue-deep); }
-.modelinfo table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.modelinfo table { width: calc(100% - 1.8rem); border-collapse: collapse; font-size: 0.86rem; }
 .modelinfo th, .modelinfo td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--rule); }
 .modelinfo th { color: var(--muted); font-weight: 400; }
 .pill { font-size: 0.74rem; padding: 0.05rem 0.45rem; border-radius: 2px; }
