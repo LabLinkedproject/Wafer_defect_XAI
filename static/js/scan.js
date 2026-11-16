@@ -142,7 +142,7 @@
     if ($("flow").dataset.html !== flow) { $("flow").innerHTML = flow; $("flow").dataset.html = flow; }
 
     const ready = s.gpio_access && s.origin_set && !busy;
-    for (const id of ["btnScan", "btnBounds", "btnOrigin", "btnWaferCenter", "btnSetCenter", "btnSave"]) {
+    for (const id of ["btnScan", "btnBounds", "btnOrigin", "btnSetOrigin", "btnWaferCenter", "btnSetCenter", "btnSave"]) {
       $(id).disabled = !ready;
     }
     $("btnScan").disabled = !ready || !plan?.all_in_limits;
@@ -250,7 +250,10 @@
   // ── 이벤트 ───────────────────────────────────────────────────
   $("btnScan").onclick = () => {
     clearMosaic();
-    act("/api/scan/start", {}, `${plan.order.length}지점 스캔을 시작합니다. 갠트리 주변에 손이나 물건이 없는지 확인하세요.`);
+    const p = status && status.position;
+    const where = p ? `기록상 갠트리 위치 (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) mm 에서 출발합니다. ` +
+      "손으로 옮겼다면 취소하고 '여기를 원점으로'를 먼저 누르세요.\n\n" : "";
+    act("/api/scan/start", {}, `${where}${plan.order.length}지점 스캔을 시작합니다. 갠트리 주변에 손이나 물건이 없는지 확인하세요.`);
   };
   $("btnStop").onclick = () => act("/api/gantry/stop", {});
   $("btnMap").onclick = () => act("/api/scan/map", {});
@@ -283,6 +286,9 @@
   };
   $("btnBounds").onclick = () => { $("corners").innerHTML = ""; $("corners").dataset.n = "0"; act("/api/scan/bounds", {}); };
   $("btnOrigin").onclick = () => act("/api/gantry/origin", {});
+  $("btnSetOrigin").onclick = () => act("/api/gantry/set-origin", {},
+    "지금 갠트리 위치를 원점(웨이퍼 정중앙)으로 지정합니다. 모터는 움직이지 않습니다.\n" +
+    "카메라 가운데에 웨이퍼 정중앙 교차점(22·23·29·30번 다이가 만나는 점)이 있나요?");
   $("btnWaferCenter").onclick = () => act("/api/gantry/wafer-center", {});
   $("btnSetCenter").onclick = async () => {
     if (!confirm("지금 카메라 위치를 웨이퍼 중심으로 지정합니다. 십자선이 웨이퍼 중심에 있나요?")) return;

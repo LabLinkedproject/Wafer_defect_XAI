@@ -83,10 +83,13 @@
         <svg id="minimap" viewBox="0 0 220 190" role="img" aria-label="갠트리 좌표 미니맵"></svg>
       </div>
       <div class="row wrap">
-        <button class="btn" id="btnOrigin">갠트리 원점</button>
+        <button class="btn accent" id="btnSetOrigin" title="모터는 움직이지 않습니다">여기를 원점으로 (손으로 옮긴 뒤)</button>
+        <button class="btn" id="btnOrigin">갠트리 원점으로 이동</button>
         <button class="btn" id="btnWaferCenter">웨이퍼 중심으로</button>
         <button class="btn accent" id="btnSetCenter">현재 위치 = 웨이퍼 중심</button>
       </div>
+      <p class="hint"><b>손으로 갠트리를 옮겼다면</b> 웨이퍼 정중앙(가운데 네 다이가 만나는 점)에 맞추고
+        <b>여기를 원점으로</b>를 누른 뒤 스캔하세요. 프로그램은 손으로 옮긴 것을 모릅니다.</p>
       <p class="hint">카메라 십자선이 웨이퍼 중심(가운데 네 다이가 만나는 점)에 오도록 이동한 뒤
         <b>현재 위치 = 웨이퍼 중심</b>을 누르세요. 스캔 좌표는 모두 이 점 기준입니다.</p>
     </div>

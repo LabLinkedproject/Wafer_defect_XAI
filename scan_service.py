@@ -340,6 +340,17 @@ class ScanService:
         cfg = scan_config.load()
         self.goto(float(cfg["wafer_center_x"]), float(cfg["wafer_center_y"]), "웨이퍼 중심")
 
+    def set_origin_here(self) -> dict:
+        """손으로 갠트리를 웨이퍼 정중앙에 둔 뒤 누른다: 지금 위치를 갠트리 원점이자 웨이퍼 중심 (0, 0) 으로 한다.
+        모터에는 위치 센서가 없어 손으로 옮긴 것을 모른다. 이 버튼 없이 스캔하면 마지막 기록 위치 기준으로 움직여
+        엉뚱한 곳으로 갔다(2026-11-16). 모터는 움직이지 않는다."""
+        if self.job["busy"]:
+            raise JobError("작업 중에는 바꿀 수 없습니다.")
+        st = self._state()
+        st["x_mm"], st["y_mm"] = 0.0, 0.0
+        gcli.save_state(st)
+        return scan_config.update(wafer_center_x=0.0, wafer_center_y=0.0)
+
     def set_wafer_center_here(self) -> dict:
         if self.job["busy"]:
             raise JobError("작업 중에는 바꿀 수 없습니다.")

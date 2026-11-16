@@ -64,6 +64,10 @@ def create_scan_blueprint(camera) -> Blueprint:
     def origin():
         return call(svc.goto, 0.0, 0.0, "갠트리 원점")
 
+    @bp.route("/api/gantry/set-origin", methods=["POST"])
+    def set_origin():
+        return call(svc.set_origin_here)
+
     @bp.route("/api/gantry/wafer-center", methods=["POST"])
     def wafer_center():
         return call(svc.goto_wafer_center)
