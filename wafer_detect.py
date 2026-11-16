@@ -25,6 +25,7 @@ SCRIBE_MARGIN = 12            # 스크라이브 라인은 정렬 오차에 민�
 MIN_DIE_COVERAGE = 0.85       # 다이들의 보통 촬영 비율 대비 이보다 적게 찍힌 다이는 검사하지 않는다 (가장자리 다이는 이웃 사진이 덮는 몫이 없어 0.87 배 안팎)
 MIN_DIE_COVERAGE_ABS = 0.5    # 그래도 다이 면적의 절반도 안 찍힌 다이는 뺀다
 MAX_SHIFT = 8                 # 미세 정렬 허용 폭 (px)
+GOLDEN_MAX_SHIFT_MM = 4.0     # 기준 웨이퍼 같은 다이에 맞출 때 허용 폭 (웨이퍼를 다시 놓은 어긋남)
 SHARP_Z = 7.0                 # 선명한 결함 판정선
 STAIN_Z = 7.0                 # 번짐 결함 판정선
 MIN_CONTRAST = 0.05           # 맵 합성 잔차보다 작은 밝기 차이는 결함으로 보지 않는다
@@ -116,14 +117,39 @@ def _flatten(a: np.ndarray, sigma: float) -> np.ndarray:
     return a / np.maximum(base, 1.0)
 
 
-def align(crops: dict, P: int):
-    """다이를 임시 기준에 맞춘다. 합성 잔차가 1~2 px 남기 때문에 필요하다."""
+def golden_crops(gray: np.ndarray, meta: dict, seen: np.ndarray | None = None) -> dict:
+    """기준 웨이퍼(결함 없는 순정 상태) 맵을 다이별로 잘라 둔다. 같은 위치의 다이끼리 비교하는 데 쓴다."""
+    img, valid, P = rectify(gray, meta, seen)
+    out = {}
+    for d in die_layout():
+        r, c = R.die_slot(d)
+        v = valid[r * P:(r + 1) * P, c * P:(c + 1) * P]
+        if v.mean() >= MIN_DIE_COVERAGE_ABS:
+            out[d["id"]] = {"img": img[r * P:(r + 1) * P, c * P:(c + 1) * P].copy(), "valid": v.copy(), "P": P}
+    return out
+
+
+def _golden_for(golden: dict | None, die_id: int, P: int):
+    g = (golden or {}).get(die_id)
+    if g is None:
+        return None
+    if g["P"] != P:                                   # 두 맵의 격자 간격이 1 px 다를 수 있다
+        g = {"img": cv2.resize(g["img"], (P, P)), "valid": cv2.resize(g["valid"].astype(np.uint8), (P, P)) > 0, "P": P}
+    return g
+
+
+def align(crops: dict, P: int, golden: dict | None = None):
+    """다이를 기준에 맞춘다. 합성 잔차가 1~2 px 남기 때문에 필요하다.
+    기준 웨이퍼가 있으면 같은 다이에 맞춘다. 웨이퍼를 다시 놓으면 몇 mm 어긋날 수 있어 더 넓게 찾는다."""
     win = cv2.createHanningWindow((P, P), cv2.CV_32F)
     stack = np.stack([c["img"] for c in crops.values()])
-    ref = _flatten(np.median(stack, 0), P / 6)
+    med = _flatten(np.median(stack, 0), P / 6)
     for c in crops.values():
+        g = _golden_for(golden, c["die"]["id"], P)
+        ref = _flatten(g["img"], P / 6) if g is not None else med
+        lim = GOLDEN_MAX_SHIFT_MM * P / 32 if g is not None else MAX_SHIFT
         (dx, dy), _ = cv2.phaseCorrelate(ref.astype(np.float32), _flatten(c["img"], P / 6).astype(np.float32), win)
-        dx, dy = float(np.clip(dx, -MAX_SHIFT, MAX_SHIFT)), float(np.clip(dy, -MAX_SHIFT, MAX_SHIFT))
+        dx, dy = float(np.clip(dx, -lim, lim)), float(np.clip(dy, -lim, lim))
         M = np.array([[1, 0, -dx], [0, 1, -dy]], np.float32)
         c["img"] = cv2.warpAffine(c["img"], M, (P, P), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         c["valid"] = cv2.warpAffine(c["valid"].astype(np.uint8), M, (P, P), flags=cv2.INTER_NEAREST) > 0
@@ -134,20 +160,29 @@ def robust_sigma(a: np.ndarray) -> float:
     return float(1.4826 * np.median(np.abs(a - np.median(a))))
 
 
-def analyse(crops: dict, P: int) -> dict:
-    """다이별 z 지도를 만든다."""
+def analyse(crops: dict, P: int, golden: dict | None = None) -> dict:
+    """다이별 z 지도를 만든다. 기준은 같은 웨이퍼 다이들의 중앙값이고, 기준 웨이퍼가 있으면 그 웨이퍼의 같은 다이다.
+    같은 다이끼리 비교하면 그 자리에 늘 있는 아크릴 흠집·카메라 반사·조명 번짐이 상쇄된다(2026-11-16)."""
     stack = np.stack([c["img"] for c in crops.values()])
     ref = np.median(stack, 0)
     inner = np.zeros((P, P), bool)
     inner[SCRIBE_MARGIN:-SCRIBE_MARGIN, SCRIBE_MARGIN:-SCRIBE_MARGIN] = True
-    ref_sharp = _flatten(ref, P / 6)
-    ref_soft = cv2.GaussianBlur(ref, (0, 0), P / 14) / np.median(ref[inner])
+    ref_sharp_med = _flatten(ref, P / 6)
+    ref_soft_med = cv2.GaussianBlur(ref, (0, 0), P / 14) / np.median(ref[inner])
     sharp_all, soft_all = [], []
     for c in crops.values():
+        g = _golden_for(golden, c["die"]["id"], P)
         m = c["valid"] & inner
+        if g is not None:
+            m = m & g["valid"]
+            ref_sharp = _flatten(g["img"], P / 6)
+            ref_soft = cv2.GaussianBlur(g["img"], (0, 0), P / 14) / max(float(np.median(g["img"][m])) if m.any() else 1.0, 1.0)
+        else:
+            ref_sharp, ref_soft = ref_sharp_med, ref_soft_med
         c["mask"] = m
+        c["golden"] = g is not None
         c["sharp"] = _flatten(c["img"], P / 6) - ref_sharp
-        c["soft"] = cv2.GaussianBlur(c["img"], (0, 0), P / 14) / np.median(c["img"][m]) - ref_soft
+        c["soft"] = cv2.GaussianBlur(c["img"], (0, 0), P / 14) / max(float(np.median(c["img"][m])) if m.any() else 1.0, 1.0) - ref_soft
         sharp_all.append(c["sharp"][m])
         soft_all.append(c["soft"][m])
     s1, s2 = robust_sigma(np.concatenate(sharp_all)), robust_sigma(np.concatenate(soft_all))
@@ -268,19 +303,20 @@ def detect(map_path: str, meta: dict, seen: np.ndarray | None = None) -> dict:
 
 
 def detect_array(gray: np.ndarray, meta: dict, per_die: int = 2, seen: np.ndarray | None = None,
-                 min_area_mm2: float = 0.0, sharp_z: float = SHARP_Z, dark_only: bool = False) -> dict:
+                 min_area_mm2: float = 0.0, sharp_z: float = SHARP_Z, dark_only: bool = False,
+                 golden: dict | None = None) -> dict:
     img, valid, P = rectify(gray, meta, seen)
-    return detect_rectified(img, valid, P, per_die, min_area_mm2, sharp_z, dark_only)
+    return detect_rectified(img, valid, P, per_die, min_area_mm2, sharp_z, dark_only, golden)
 
 
 def detect_rectified(img: np.ndarray, valid: np.ndarray, P: int, per_die: int = 2, min_area_mm2: float = 0.0,
-                     sharp_z: float = SHARP_Z, dark_only: bool = False) -> dict:
+                     sharp_z: float = SHARP_Z, dark_only: bool = False, golden: dict | None = None) -> dict:
     dies = die_layout()
     crops = crop_dies(img, valid, P, dies)
     if len(crops) < 8:
         raise ValueError(f"검사 가능한 다이가 {len(crops)}개뿐입니다. 기준 다이를 만들려면 8개 이상 필요합니다.")
-    align(crops, P)
-    noise = analyse(crops, P)
+    align(crops, P, golden)
+    noise = analyse(crops, P, golden)
     found = extract(crops, P, noise, min_area_mm2, sharp_z, dark_only)
     counts: dict[int, dict] = {}
     for d in found:

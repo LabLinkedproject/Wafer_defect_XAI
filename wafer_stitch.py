@@ -30,6 +30,7 @@ MIN_IMAGES = 8
 AGREE_SCALE = 0.06         # 직접 잰 카메라 축척이 최근 값과 이만큼 넘게 다르면 최근 값 기준으로 다시 잰다
 AGREE_TURN_DEG = 4.0
 MASK_NAME = "wafer_map_mask.png"
+VIEW_NAME = "wafer_map_view.jpg"      # 화면용 맵 (검출은 wafer_map.jpg)
 WEAK_NAME = "wafer_map_weak.png"      # 카메라 반사·조명 번짐 자리로만 찍힌 곳 (기준 웨이퍼 없이 비교할 때 뺀다)
 GLARE_LEVEL = 245          # 사진들의 중앙값이 이 이상이면 조명 정반사 (카메라 상한 약 248)
 GLARE_RATIO = 1.35         # 주변(넓은 중앙값) 대비 이 배율보다 밝으면 정반사
@@ -667,6 +668,7 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     lo, hi = np.percentile(ref, 0.5), np.percentile(ref, 99.7)
     out = np.clip((rgb - lo) / max(hi - lo, 1e-6) * 245, 0, 255).astype(np.uint8)
     out[~mask] = (18, 18, 20)
+    detect_img = out.copy()                  # 검출용은 채우지 않는다: 채운 자리 경계가 어둡게 읽혀 오검출이 났다(2026-11-16)
     if wafer:
         # 웨이퍼 안의 미촬영 자리(모든 사진에서 조명이 포화된 다이 모서리)는 검게 두면 결함처럼 보인다(2026-11-16).
         # 화면용으로 주변 색을 번지게 채운다. 검출은 촬영 범위 마스크로 계속 뺀다
@@ -691,15 +693,16 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
         a = a[::-1] if flip_y else a
         return a[:, ::-1] if flip_x else a
     # 아래 측정값은 뒤집기 전 좌표로 계산하고, 저장하는 영상과 좌표만 뒤집는다
-    cv2.imwrite(os.path.join(out_dir, name), oriented(out), [cv2.IMWRITE_JPEG_QUALITY, 92,
-                                                    cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444])
+    jpeg = [cv2.IMWRITE_JPEG_QUALITY, 92, cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444]
+    cv2.imwrite(os.path.join(out_dir, name), oriented(detect_img), jpeg)
+    cv2.imwrite(os.path.join(out_dir, VIEW_NAME), oriented(out), jpeg)     # 화면용 (미촬영 자리를 주변 색으로 채움)
     # 촬영된 범위. 웨이퍼가 어둡게 찍히면 맵 밝기만으로는 미촬영 영역과 구분할 수 없다
     cv2.imwrite(os.path.join(out_dir, MASK_NAME), oriented(mask).astype(np.uint8) * 255)
     cv2.imwrite(os.path.join(out_dir, WEAK_NAME), oriented(weak).astype(np.uint8) * 255)
 
     center_g = (pos.max(0) + pos.min(0)) / 2
     result = {
-        "images": len(dies), "map": name, "mask": MASK_NAME, "weak_mask": WEAK_NAME, "size_px": [SZ[1], SZ[0]],
+        "images": len(dies), "map": name, "view": VIEW_NAME, "mask": MASK_NAME, "weak_mask": WEAK_NAME, "size_px": [SZ[1], SZ[0]],
         "glare_pct": round(float(glare.mean() * 100), 1),
         "lens_pct": round(float(lens.mean() * 100), 2),
         "camera": {"px_per_mm_full": round(scale_mm / WORK_SCALE, 3), "rotation_deg": round(cam["theta_deg"], 2),
@@ -766,7 +769,7 @@ def latest_map(scan_root: str = os.path.join("captures", "scans")) -> dict | Non
             with open(meta) as f:
                 m = json.load(f)
             m["dir"] = os.path.basename(d)
-            m["url"] = f"/scans/{m['dir']}/{m['map']}"
+            m["url"] = f"/scans/{m['dir']}/{m.get('view') or m['map']}"
             return m
     return None
 

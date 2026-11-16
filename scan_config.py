@@ -47,6 +47,9 @@ DEFAULTS = {
     "detect_chroma": False,
     # 검사면 고정: "front"(투명 앞면) 이면 어두운 것만 결함으로 센다. None 이면 맵의 격자선 밝기로 자동 판단
     "surface": None,
+    # 기준 웨이퍼(결함 없는 순정 상태) 스캔 id. 정하면 같은 위치의 다이끼리 비교한다. 웨이퍼를 그대로 둔 채 찍어야 한다
+    # (11-16 시험: 두 스캔 사이 웨이퍼가 1~2 mm·1° 움직이자 잡음이 3배로 늘었다). None 이면 같은 웨이퍼 다이끼리 비교
+    "reference_scan": None,
     "jpeg_quality": 92,
 }
 

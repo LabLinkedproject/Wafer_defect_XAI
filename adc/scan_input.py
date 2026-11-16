@@ -33,7 +33,7 @@ def map_meta(scan_id: str) -> dict:
     with open(os.path.join(d, "wafer_map.json")) as f:
         m = json.load(f)
     m["dir"] = os.path.basename(d)
-    m["url"] = f"/scans/{m['dir']}/{m['map']}"
+    m["url"] = f"/scans/{m['dir']}/{m.get('view') or m['map']}"      # 화면용 맵이 있으면 그것을 보여 준다
     return m
 
 
@@ -54,6 +54,29 @@ def scans() -> list[dict]:
     return out
 
 
+def _reference_for(scan_id: str) -> str | None:
+    """설정된 기준 웨이퍼 스캔 (자기 자신이거나 맵이 없으면 쓰지 않는다)."""
+    ref = scan_config.load().get("reference_scan")
+    if not ref or os.path.basename(str(ref)) == os.path.basename(scan_id):
+        return None
+    try:
+        scan_dir(ref)
+    except KeyError:
+        return None
+    return os.path.basename(str(ref))
+
+
+def _golden(ref_id: str, cfg: dict) -> dict:
+    """기준 웨이퍼 맵을 다이별로 자른다. 같은 검사면 설정으로 같은 채널을 쓴다."""
+    d = scan_dir(ref_id)
+    meta = wafer_detect.load_meta(d)
+    gray, _ = wafer_detect.detection_channel(cv2.imread(os.path.join(d, meta["map"])), meta,
+                                             use_chroma=bool(cfg.get("detect_chroma")), surface=cfg.get("surface"))
+    mask_path = os.path.join(d, meta.get("mask", ""))
+    seen = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if meta.get("mask") and os.path.isfile(mask_path) else None
+    return wafer_detect.golden_crops(gray, meta, seen)
+
+
 def detect(scan_id: str) -> dict:
     """스캔 맵의 결함 검출 결과. 맵이 새로 합성되면 다시 계산한다."""
     d = scan_dir(scan_id)
@@ -62,7 +85,7 @@ def detect(scan_id: str) -> dict:
     if os.path.isfile(path) and os.path.getmtime(path) >= os.path.getmtime(map_path):
         with open(path) as f:
             cached = json.load(f)
-        if cached.get("version") == VERSION:
+        if cached.get("version") == VERSION and cached.get("reference") == _reference_for(scan_id):
             return cached
     meta = wafer_detect.load_meta(d)
     cfg = scan_config.load()
@@ -70,15 +93,17 @@ def detect(scan_id: str) -> dict:
                                                 surface=cfg.get("surface"))
     mask_path = os.path.join(d, meta.get("mask", ""))
     seen = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if meta.get("mask") and os.path.isfile(mask_path) else None
+    ref_id = _reference_for(scan_id)
+    golden = _golden(ref_id, cfg) if ref_id else None
     weak_path = os.path.join(d, meta.get("weak_mask", ""))
-    if seen is not None and meta.get("weak_mask") and os.path.isfile(weak_path):
+    if golden is None and seen is not None and meta.get("weak_mask") and os.path.isfile(weak_path):
         # 카메라 반사·조명 번짐 자리로만 찍힌 곳은 같은 웨이퍼 다이끼리 비교하면 오검출이 난다(2026-11-14) → 뺀다
         seen = np.where(cv2.imread(weak_path, cv2.IMREAD_GRAYSCALE) > 127, 0, seen).astype(np.uint8)
     r = wafer_detect.detect_array(gray, meta, seen=seen, min_area_mm2=prof["min_area_mm2"], sharp_z=prof["sharp_z"],
-                                  dark_only=prof["dark_only"])
+                                  dark_only=prof["dark_only"], golden=golden)
     out = {"version": VERSION, "scan": os.path.basename(d), "defects": r["defects"], "inspected": r["inspected"],
            "per_die": 2, "quadrats": [[k[0], k[1], k[2], v] for k, v in sorted(r["quadrats"].items())],
-           "noise": r["noise"], "shift_px": r["shift_px"], "channel": prof["channel"]}
+           "noise": r["noise"], "shift_px": r["shift_px"], "channel": prof["channel"], "reference": ref_id}
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(out, f, ensure_ascii=False, default=float)
