@@ -465,10 +465,11 @@ class ScanService:
         if n < wafer_stitch.MIN_IMAGES:
             raise JobError(f"합성에 필요한 사진이 부족합니다 ({n}장)")
         # 맵 방향은 하드웨어(갠트리 축과 웨이퍼의 관계)로 정해지므로 지금 설정을 따른다 (예전 스캔을 다시 합성할 때도)
-        # 가장 낮은 CPU·디스크 우선순위로 돌린다. 보드 전원이 약해 순간 부하가 몰리면 멈춘다(2026-11-14)
-        cmd = ["nice", "-n", "19", "ionice", "-c", "3",
-               sys.executable, os.path.join(BASE_DIR, "map_job.py"), os.path.abspath(scan_dir)]
         cfg = scan_config.load()
+        cmd = [sys.executable, os.path.join(BASE_DIR, "map_job.py"), os.path.abspath(scan_dir)]
+        if cfg.get("map_cpu") == "little1":
+            # 가장 약한 전원용: 최저 우선순위. 대신 CPU 클록이 최저(408 MHz)에 머물러 합성이 30분 걸렸다(2026-11-14)
+            cmd = ["nice", "-n", "19", "ionice", "-c", "3"] + cmd
         if int(cfg["wafer_sign_y"]) < 0:
             cmd.append("--flip-y")
         if cfg.get("camera_scale_hint"):

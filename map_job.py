@@ -11,13 +11,24 @@ map_job.py
 import os
 import sys
 
-# 작은 코어(A55) 하나, 스레드 하나로만 돈다. 보드가 노트북 USB(약 5 V 0.9 A)로 전원을 받아
-# 계산이 몰리는 순간 전압이 떨어져 멈추거나 파일시스템이 읽기 전용으로 잠긴다(2026-11-14 16:28·16:39·17:03).
-# 합성이 몇 배 느려지는 대신 멈추지 않게 한다
-CORES = {0}
-THREADS = 1
-for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
-    os.environ.setdefault(_k, str(THREADS))
+# 맵 합성 CPU 사용은 설정 map_cpu 로 고른다 (scan_config.py 설명 참고). 전원이 약하면 계산이 몰리는 순간
+# 전압이 떨어져 보드가 멈추거나 파일시스템이 읽기 전용으로 잠긴다(2026-11-14 노트북 USB 전원에서 세 번).
+MODES = {"all": (None, None), "little4": ({0, 1, 2, 3}, 4), "little1": ({0}, 1)}
+
+
+def _mode():
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import scan_config
+        return MODES.get(scan_config.load().get("map_cpu"), MODES["all"])
+    except Exception:
+        return MODES["little4"]
+
+
+CORES, THREADS = _mode()
+if THREADS:
+    for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(_k, str(THREADS))
 
 
 def say(kind: str, msg: str = ""):
@@ -26,13 +37,15 @@ def say(kind: str, msg: str = ""):
 
 def main() -> int:
     scan_dir = sys.argv[1]
-    try:
-        os.sched_setaffinity(0, CORES & os.sched_getaffinity(0) or os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        pass
+    if CORES:
+        try:
+            os.sched_setaffinity(0, CORES & os.sched_getaffinity(0) or os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            pass
     try:
         import cv2
-        cv2.setNumThreads(THREADS)
+        if THREADS:
+            cv2.setNumThreads(THREADS)
         import wafer_stitch
         from adc import scan_input
         say("phase", "stitch")
