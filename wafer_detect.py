@@ -104,37 +104,8 @@ def rectify(gray: np.ndarray, meta: dict, seen: np.ndarray | None = None) -> tup
     yy, xx = np.mgrid[0:side, 0:side].astype(np.float32)
     disc = np.hypot(xx - h + 0.5, yy - h + 0.5) < meta["wafer"]["radius_px"] / k * 0.985
     valid = cv2.erode((seen & disc).astype(np.uint8), np.ones((15, 15), np.uint8)) > 0   # 촬영 경계는 합성 잔차가 크다
-    # 다이는 격자선 안쪽이다. 원점을 손으로 잡아 격자선이 다이 칸 경계에서 최대 2.5 mm 어긋났다(11-17) → 칸을 선에 맞춘다
-    ox, oy = _grid_phase(img, valid, P, meta.get("grid", {}).get("lines") == "dark")
-    if ox or oy:
-        T = np.float32([[1, 0, -ox], [0, 1, -oy]])
-        img = cv2.warpAffine(img, T, (side, side), flags=cv2.INTER_LINEAR)
-        valid = cv2.warpAffine(valid.astype(np.uint8), T, (side, side), flags=cv2.INTER_NEAREST) > 0
-    meta.setdefault("grid", {})["shift_px"] = [ox, oy]
     return img, valid, P
 
-
-def _grid_phase(img: np.ndarray, valid: np.ndarray, P: int, dark_lines: bool = False) -> tuple[int, int]:
-    """격자선이 다이 칸 경계(k·P)에서 얼마나 어긋났는지 (px). 열·행 평균 밝기에서 선이 가장 잘 겹치는 위상을 찾는다.
-    선이 또렷하지 않으면 0 (맞추지 않는다)."""
-    out = []
-    for axis in (0, 1):                                   # 0: 세로선(x), 1: 가로선(y)
-        n = valid.sum(axis=axis)
-        prof = np.where(n > P // 4, (img * valid).sum(axis=axis) / np.maximum(n, 1), np.nan)
-        ok = ~np.isnan(prof)
-        if ok.sum() < 2 * P:
-            out.append(0)
-            continue
-        prof = np.interp(np.arange(len(prof)), np.flatnonzero(ok), prof[ok])
-        prof = prof - np.convolve(prof, np.ones(P // 5) / (P // 5), mode="same")      # 선만 남긴다
-        if dark_lines:
-            prof = -prof
-        k = np.arange(1, len(prof) // P)
-        score = np.array([prof[np.clip(k * P + o, 0, len(prof) - 1)].mean() for o in range(-P // 2, P // 2)])
-        best = int(np.argmax(score))
-        strong = score[best] > score.mean() + 3 * score.std()
-        out.append(best - P // 2 if strong else 0)
-    return out[0], out[1]
 
 
 def crop_dies(img, valid, P, dies):
@@ -392,7 +363,7 @@ def apply_gdbn(verdicts: dict) -> dict:
 
 
 def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
-                 ref: np.ndarray | None = None, shift=(0, 0)) -> tuple[list[dict], dict]:
+                 ref: np.ndarray | None = None) -> tuple[list[dict], dict]:
     """결함 분석은 합성 전체 이미지, 양불 판정은 다이 단위로 나눈다 (docs/specs/die-verdict.md).
     1. 다이 비교 조각(오검출이 적다)을 씨앗으로 웨이퍼 좌표에 놓는다.
     2. 합성 전체 이미지에서 씨앗 가까이의 어두운 몸체를 따라가 다이 경계·반사 띠로 끊긴 결함을 하나로 잇는다
@@ -498,9 +469,8 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
             elif kind == "stain":
                 p[3] += int(inside.sum())
             found.append({"die": did, "type": kind, "obj": obj,
-                          # 좌표는 격자 맞춤 전 웨이퍼 기준으로 (결과 화면·오버레이가 맵 좌표와 맞도록)
-                          "x_mm": round(float((xs[inside].mean() + shift[0] - R.GRID_DIES / 2 * P) * mm), 2),
-                          "y_mm": round(float((R.GRID_DIES / 2 * P - ys[inside].mean() - shift[1]) * mm), 2),
+                          "x_mm": round(float((xs[inside].mean() - R.GRID_DIES / 2 * P) * mm), 2),
+                          "y_mm": round(float((R.GRID_DIES / 2 * P - ys[inside].mean()) * mm), 2),
                           "area_mm2": round(float(inside.sum()) * mm * mm, 2), "length_mm": round(float(long_mm), 2),
                           "center": center})
     verdicts = {}
@@ -572,16 +542,11 @@ def detect_array(gray: np.ndarray, meta: dict, per_die: int = 2, seen: np.ndarra
                  min_area_mm2: float = 0.0, sharp_z: float = SHARP_Z, dark_only: bool = False,
                  golden: dict | None = None) -> dict:
     img, valid, P = rectify(gray, meta, seen)
-    shift = meta["grid"]["shift_px"]
-    r = detect_rectified(img, valid, P, per_die, min_area_mm2, sharp_z, dark_only, golden, shift)
-    mm = WAFER_MODEL["pitch_mm"] / P
-    r["grid_shift_mm"] = [round(shift[0] * mm, 2), round(-shift[1] * mm, 2)]     # 격자선이 다이 칸에서 어긋난 양 (x 오른쪽, y 위)
-    return r
+    return detect_rectified(img, valid, P, per_die, min_area_mm2, sharp_z, dark_only, golden)
 
 
 def detect_rectified(img: np.ndarray, valid: np.ndarray, P: int, per_die: int = 2, min_area_mm2: float = 0.0,
-                     sharp_z: float = SHARP_Z, dark_only: bool = False, golden: dict | None = None,
-                     shift=(0, 0)) -> dict:
+                     sharp_z: float = SHARP_Z, dark_only: bool = False, golden: dict | None = None) -> dict:
     dies = die_layout()
     crops = crop_dies(img, valid, P, dies)
     if len(crops) < 8:
@@ -589,7 +554,7 @@ def detect_rectified(img: np.ndarray, valid: np.ndarray, P: int, per_die: int = 
     align(crops, P, golden)
     noise = analyse(crops, P, golden)
     extract(crops, P, noise, min_area_mm2, sharp_z, dark_only)
-    found, verdicts = link_defects(crops, P, img, follow_dark=dark_only, ref=noise["reference"], shift=shift)
+    found, verdicts = link_defects(crops, P, img, follow_dark=dark_only, ref=noise["reference"])
     return {"inspected": sorted(crops), "defects": found, "verdicts": verdicts, "pitch_px": P,
             "noise": {k: round(v, 5) for k, v in noise.items() if k != "reference"},
             "shift_px": round(float(np.max([np.hypot(*c["shift"]) for c in crops.values()])), 2),

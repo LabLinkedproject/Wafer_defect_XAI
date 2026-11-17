@@ -306,6 +306,16 @@ class ScanService:
         if self._g is not None:
             self._g.stop_requested = True
 
+    def reset(self):
+        """초기화: 진행 중인 작업을 멈추고 끝날 때까지 기다린 뒤 원점(0, 0)으로 돌아간다.
+        정지만 하면 멈춘 자리에서 다시 시작해 스캔이 어긋났다 (2026-11-17)."""
+        self.stop()
+        if self._thread is not None:
+            self._thread.join(timeout=30)
+        if self.job["busy"]:
+            raise JobError("작업이 아직 멈추지 않았습니다 (맵 합성 중일 수 있음). 잠시 뒤 다시 누르세요.")
+        self.goto(0.0, 0.0, "초기화: 원점 복귀")
+
     # ── 단순 이동 ──────────────────────────────────────────────────
     def _precheck(self, x, y):
         """작업을 띄우기 전에 범위를 확인해, 범위 밖 요청은 즉시 거부한다."""

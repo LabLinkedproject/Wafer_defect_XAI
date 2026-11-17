@@ -160,6 +160,7 @@
     $("btnScan").disabled = !ready || !plan?.all_in_limits;
     document.querySelectorAll(".jog").forEach((b) => (b.disabled = !ready));
     $("btnStop").disabled = !busy;
+    $("btnReset").disabled = !(s.gpio_access && s.origin_set);       // 작업 중에도 누를 수 있다 (멈추고 복귀)
 
     // 결과
     let currentId = null;
@@ -246,6 +247,12 @@
     act("/api/scan/start", {}, `${where}${plan.order.length}지점 스캔을 시작합니다. 갠트리 주변에 손이나 물건이 없는지 확인하세요.`);
   };
   $("btnStop").onclick = () => act("/api/gantry/stop", {});
+  $("btnReset").onclick = () => {
+    const p = status && status.position;
+    const from = p ? `현재 (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) mm 에서 ` : "";
+    act("/api/gantry/reset", {}, `${from}원점 (0, 0) 으로 이동합니다. 진행 중인 작업은 멈춥니다.\n` +
+      "갠트리 주변에 손이나 물건이 없는지 확인하세요.");
+  };
   $("btnMap").onclick = () => act("/api/scan/map", {});
   $("btnOrigin").onclick = () => act("/api/gantry/origin", {});
   $("btnSetOrigin").onclick = () => act("/api/gantry/set-origin", {},

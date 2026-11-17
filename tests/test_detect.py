@@ -12,14 +12,13 @@ P = 170
 SIDE = R.GRID_DIES * P
 
 
-def clean_map(seed=0, line=-25, shift=0):
-    """스크라이브 라인과 조명 기울기, 잡음이 있는 곧은 웨이퍼 맵. line>0 이면 투명 앞면처럼 격자선이 밝다.
-    shift: 격자선을 가로로 이만큼(px) 옮긴다 (원점을 손으로 잡아 생기는 어긋남)"""
+def clean_map(seed=0, line=-25):
+    """스크라이브 라인과 조명 기울기, 잡음이 있는 곧은 웨이퍼 맵. line>0 이면 투명 앞면처럼 격자선이 밝다"""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:SIDE, 0:SIDE].astype(np.float32)
     g = 150 + 0.01 * xx + 0.008 * yy
     for k in range(R.GRID_DIES + 1):
-        g[:, max(k * P + shift - 2, 0):max(k * P + shift + 2, 0)] += line
+        g[:, max(k * P - 2, 0):k * P + 2] += line
         g[max(k * P - 2, 0):k * P + 2, :] += line
     g = g + rng.normal(0, 0.4, g.shape)
     meta = {"wafer": {"center_px": [SIDE / 2 - 0.5, SIDE / 2 - 0.5], "radius_px": 135 / 32 * P},
@@ -97,17 +96,6 @@ class Detect(unittest.TestCase):
             v[i]["verdict"] = "defect"
         W.apply_gdbn(v)
         self.assertEqual(v[center]["verdict"], "normal")
-
-    def test_die_boundary_follows_grid_lines(self):
-        # 11-17 사용자 지적: 다이는 격자선 안쪽만이다. 원점이 2.5 mm 어긋나 이웃 다이 결함이 들어왔다
-        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
-        by = {(d["row"], d["col"]): d["id"] for d in die_layout()}
-        a, b = R.die_slot(die_at(20))
-        left = by[(die_at(20)["row"], die_at(20)["col"] - 1)]
-        g, meta = clean_map(line=25, shift=50)                                  # 격자선이 50 px(9.4 mm) 오른쪽
-        cv2.circle(g, (b * P + 25, a * P + 85), 5, 120, -1)                     # 옮긴 선의 25 px 왼쪽 → 왼쪽 다이
-        r = W.detect_array(g, meta, **front)
-        self.assertEqual({d["die"] for d in r["defects"]}, {left})
 
     def test_die_verdict_rule(self):
         self.assertEqual(W.die_verdict(False, 0.0), "normal")

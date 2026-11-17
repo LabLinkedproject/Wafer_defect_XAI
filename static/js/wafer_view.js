@@ -62,9 +62,8 @@ const WaferView = (() => {
     const img = new Image();
     img.onload = () => {
       const ctx = canvas.getContext("2d");
-      // 다이는 격자선 안쪽만 보인다 (11-17). 격자선이 다이 칸에서 어긋난 양만큼 옮기고 여백 없이 자른다
-      const [sx, sy] = (m.grid_shift_mm || [0, 0]).map((v) => v / (m.grid?.pitch_mm || 32));
-      const [px, py] = toPx(geo, col - grid / 2 + 0.5 + sx, row - grid / 2 + 0.5 - sy);
+      // 다이 칸만 여백 없이 자른다 (11-17). 칸 위치는 사용자가 맞춘 원점 그대로 (격자선으로 다시 추정하지 않는다)
+      const [px, py] = toPx(geo, col - grid / 2 + 0.5, row - grid / 2 + 0.5);
       const k = canvas.width / geo.pitch;
       ctx.fillStyle = "#101114";
       ctx.fillRect(0, 0, canvas.width, canvas.height);

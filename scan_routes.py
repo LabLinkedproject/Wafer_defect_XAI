@@ -64,6 +64,10 @@ def create_scan_blueprint(camera) -> Blueprint:
     def set_origin():
         return call(svc.set_origin_here)
 
+    @bp.route("/api/gantry/reset", methods=["POST"])
+    def reset():
+        return call(svc.reset)
+
     @bp.route("/api/gantry/stop", methods=["POST"])
     def stop():
         svc.stop()
