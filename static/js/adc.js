@@ -196,7 +196,7 @@
   function renderMap() {
     drawMap($("wafer-map"), mode, true);
     const leg = {
-      status: `<span><i style="background:${css("--normal")}"></i>정상</span><span><i style="background:${css("--defect")}"></i>불량 (중심부 침범 또는 면적 5 % 이상)</span><span><i style="background:${css("--recheck")}"></i>재검사 (가장자리에 작게, 육안 판정)</span>`,
+      status: `<span><i style="background:${css("--normal")}"></i>정상</span><span><i style="background:${css("--defect")}"></i>불량 (회로 영역 침범·면적 5 %·가장자리 긴 스크래치·넓은 스테인)</span><span><i style="background:${css("--recheck")}"></i>재검사 (가장자리에 작게·주변 불량, 육안 판정)</span>`,
       type: Object.entries(S.types).map(([k, t]) => `<span><i style="background:${css(TYPE_COLOR[k])}"></i>${esc(t.ko)}</span>`).join("") + "<span>진하면 불량, 옅으면 재검사</span>",
       xai: `<span><i class="grad" style="background:linear-gradient(90deg,#c4553f,#e6eef8,#004898)"></i>방해 ← 없음 → ${esc(S.xai.target)} 판정 지지</span>`,
     };
@@ -218,8 +218,12 @@
     const canCrop = S.wafer_map?.wafer && S.wafer_map?.grid;
     const kinds = Object.entries(d.counts).filter(([, v]) => v).map(([k]) => S.types[k].ko).join(", ") || "없음";
     const v = S.die_verdicts?.[d.id];
+    // 판정 근거 (docs/specs/inspection-criteria.md)
     const why = !v ? "-" : v.by === "operator" ? "엔지니어 확정"
-      : v.center ? "결함이 중심부에 닿음" : v.area_ratio >= 0.05 ? `결함 면적 ${(v.area_ratio * 100).toFixed(1)} %`
+      : v.center ? "결함이 회로 영역(중심부)에 닿음" : v.area_ratio >= 0.05 ? `결함 면적 ${(v.area_ratio * 100).toFixed(1)} % (5 % 이상)`
+      : v.scratch_edge_mm >= 16 ? `가장자리 스크래치 ${v.scratch_edge_mm} mm (16 mm 이상)`
+      : v.stain_ratio >= 0.025 ? `가장자리 스테인 ${(v.stain_ratio * 100).toFixed(1)} % (2.5 % 이상)`
+      : v.gdbn ? `주변 불량 다이 ${v.gdbn}개 (GDBN)`
       : v.area_ratio > 0 ? `가장자리에만 작게 (${(v.area_ratio * 100).toFixed(1)} %)` : "결함 없음";
     const set = (verdict, label, cls = "") => `<button type="button" class="btn ${cls}" data-verdict="${verdict}">${label}</button>`;
     body.innerHTML = `

@@ -47,6 +47,10 @@ CORNER_GUARD_MM = 4.0         # 다이 모서리(두 경계선 모두)에서 이
 CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 어긋남이 1~4.5 mm² 점 9개로 남았다
 EDGE_BAND_MM = 4.0            # 다이 가장자리 띠. 안쪽 24×24 mm 가 중심부 (docs/specs/die-verdict.md)
 DEFECT_AREA_RATIO = 0.05      # 다이 안 결함 면적이 이 비율 이상이면 위치와 상관없이 불량
+# 가장자리 띠에만 있을 때 종류별 기준 (docs/specs/inspection-criteria.md 3절)
+EDGE_SCRATCH_MM = 16.0        # 띠 안 스크래치가 다이 한 변의 절반 이상이면 불량 (실링을 따라 긁힘)
+EDGE_STAIN_RATIO = 0.025      # 띠 안 스테인이 다이 면적의 2.5 % 이상이면 불량 (넓은 오염)
+GDBN_MIN = 5                  # 정상 다이라도 8 방향 이웃 중 불량이 이 수 이상이면 재검사 (GDBN 현지화)
 FULL_DARK = 0.2               # 합성 전체 이미지에서 주변보다 이 비율 이상 어두우면 결함 몸체 (스크래치·스테인 10 % 지점 0.21~0.24)
 GROW_LIMIT_MM = 4.0           # 다이 비교 씨앗에서 이 거리 안에서만 몸체를 따라간다 (검사한 다이 안의 반사 띠·스크라이브)
 GROW_FAR_MM = 12.0            # 검사 못 한 다이 자리에서는 더 멀리 따라간다 (11-17: 다이 23 을 지나는 스크래치 꼬리).
@@ -330,11 +334,30 @@ def _absorb_tails(objs: list[dict], mm: float) -> list[dict]:
     return keep + out
 
 
-def die_verdict(center_hit: bool, area_ratio: float) -> str:
-    """다이 판정 (docs/specs/die-verdict.md). 재검사는 회생 가능할 수 있어 사람이 정한다."""
+def die_verdict(center_hit: bool, area_ratio: float, scratch_edge_mm: float = 0.0, stain_ratio: float = 0.0) -> str:
+    """다이 판정 (docs/specs/inspection-criteria.md). 회로 영역(중심부)에 닿거나 결함이 많으면 불량,
+    가장자리 띠에만 있으면 종류별 기준, 그 밖은 재검사(사람이 정한다)."""
     if center_hit or area_ratio >= DEFECT_AREA_RATIO:
         return "defect"
+    if scratch_edge_mm >= EDGE_SCRATCH_MM or stain_ratio >= EDGE_STAIN_RATIO:
+        return "defect"
     return "recheck" if area_ratio > 0 else "normal"
+
+
+def apply_gdbn(verdicts: dict) -> dict:
+    """주변 불량 속의 정상 다이(GDBN)를 재검사로 올린다. verdicts: {다이 id: {"verdict": ...}} (제자리 수정).
+    검사한 다이만 이웃으로 센다."""
+    pos = {(d["row"], d["col"]): d["id"] for d in die_layout()}
+    rc = {i: rc for rc, i in pos.items()}
+    for i, v in verdicts.items():
+        if v["verdict"] != "normal" or i not in rc:
+            continue
+        r, c = rc[i]
+        n = sum(1 for dr in (-1, 0, 1) for dc in (-1, 0, 1) if (dr, dc) != (0, 0)
+                and verdicts.get(pos.get((r + dr, c + dc)), {}).get("verdict") == "defect")
+        if n >= GDBN_MIN:
+            v.update(verdict="recheck", gdbn=n)
+    return verdicts
 
 
 def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
@@ -430,9 +453,14 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
             px, py = xs[inside] - c["x"], ys[inside] - c["y"]
             center = bool(((px >= band) & (px < P - band) & (py >= band) & (py < P - band)).any())
             did = c["die"]["id"]
-            p = parts.setdefault(did, [0, False])
+            p = parts.setdefault(did, [0, False, 0.0, 0])
             p[0] += int(inside.sum())
             p[1] = p[1] or center
+            if kind == "scratch" and inside.sum() >= MIN_SHARP_AREA:
+                (_, _), (pw, ph), _ = cv2.minAreaRect(np.column_stack([px, py]).astype(np.float32))
+                p[2] = max(p[2], max(pw, ph) * mm)
+            elif kind == "stain":
+                p[3] += int(inside.sum())
             found.append({"die": did, "type": kind, "obj": obj,
                           "x_mm": round(float((xs[inside].mean() - R.GRID_DIES / 2 * P) * mm), 2),
                           "y_mm": round(float((R.GRID_DIES / 2 * P - ys[inside].mean()) * mm), 2),
@@ -440,10 +468,12 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
                           "center": center})
     verdicts = {}
     for did in crops:
-        area_px, center = parts.get(did, (0, False))
-        ratio = area_px / (P * P)
-        verdicts[did] = {"verdict": die_verdict(center, ratio), "center": center, "area_ratio": round(ratio, 4)}
-    return found, verdicts
+        area_px, center, scratch_mm, stain_px = parts.get(did, (0, False, 0.0, 0))
+        ratio, stain_ratio = area_px / (P * P), stain_px / (P * P)
+        verdicts[did] = {"verdict": die_verdict(center, ratio, scratch_mm, stain_ratio), "center": center,
+                         "area_ratio": round(ratio, 4), "scratch_edge_mm": round(scratch_mm, 1),
+                         "stain_ratio": round(stain_ratio, 4)}
+    return found, apply_gdbn(verdicts)
 
 
 def quadrat_values(crops: dict, found: list[dict], P: int, per_die: int = 2) -> dict:

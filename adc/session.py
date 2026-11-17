@@ -121,7 +121,15 @@ class Session:
                     q = {k: v for k, v in self.quadrats.items() if k[0] in bad}
                     q.update({(i, a, b): 1.0 for i in bad - {k[0] for k in q} for a in range(2) for b in range(2)})
                     model = cnn.Model(dies, q, scoring.RuleModel(dies, {k: v for k, v in self.defects.items() if k in bad}))
-                r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model, verdicts or None)
+                ctx = None
+                if self.source == "scan":
+                    spans = {}
+                    for f in self.detection["defects"]:
+                        if f["type"] == "scratch":
+                            spans.setdefault(f["obj"], set()).add(f["die"])
+                    ctx = {"limit": scan_input.yield_limit(scan_input.defect_ratio_history(self.scan_id)),
+                           "long_scratch": max((len(v) for v in spans.values()), default=0)}
+                r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model, verdicts or None, ctx)
                 sess = {"source": self.source, "scenario": self.scenario, "edited": self.edited,
                         "scenario_name": scenarios.SCENARIOS[self.scenario]["name"],
                         "scenario_note": scenarios.SCENARIOS[self.scenario]["note"],

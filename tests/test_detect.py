@@ -74,6 +74,29 @@ class Detect(unittest.TestCase):
         v = W.detect_array(g, meta, **front)["verdicts"]
         self.assertEqual((v[20]["verdict"], v[27]["verdict"], v[5]["verdict"]), ("defect", "recheck", "normal"))
 
+    def test_edge_rules_by_kind(self):
+        # docs/specs/inspection-criteria.md 3절: 가장자리 띠에만 있을 때 종류별 변수
+        self.assertEqual(W.die_verdict(False, 0.01, scratch_edge_mm=17.0), "defect")   # 띠 안 스크래치 16 mm 이상
+        self.assertEqual(W.die_verdict(False, 0.01, scratch_edge_mm=10.0), "recheck")
+        self.assertEqual(W.die_verdict(False, 0.03, stain_ratio=0.03), "defect")       # 띠 안 스테인 2.5 % 이상
+        self.assertEqual(W.die_verdict(False, 0.02, stain_ratio=0.02), "recheck")
+
+    def test_gdbn(self):
+        # 정상 다이라도 8 방향 이웃 중 불량이 5 개 이상이면 재검사 (검사 못 한 이웃은 세지 않는다)
+        by = {(d["row"], d["col"]): d["id"] for d in die_layout()}
+        center = by[(3, 3)]
+        ring = [by[(3 + dr, 3 + dc)] for dr in (-1, 0, 1) for dc in (-1, 0, 1) if (dr, dc) != (0, 0)]
+        v = {i: {"verdict": "normal"} for i in by.values()}
+        for i in ring[:5]:
+            v[i]["verdict"] = "defect"
+        W.apply_gdbn(v)
+        self.assertEqual((v[center]["verdict"], v[center]["gdbn"]), ("recheck", 5))
+        v = {i: {"verdict": "normal"} for i in by.values()}
+        for i in ring[:4]:
+            v[i]["verdict"] = "defect"
+        W.apply_gdbn(v)
+        self.assertEqual(v[center]["verdict"], "normal")
+
     def test_die_verdict_rule(self):
         self.assertEqual(W.die_verdict(False, 0.0), "normal")
         self.assertEqual(W.die_verdict(True, 0.002), "defect")       # 중심부에 작은 점

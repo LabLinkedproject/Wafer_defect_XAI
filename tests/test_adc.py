@@ -115,6 +115,19 @@ class WaferVerdict(unittest.TestCase):
         self.assertEqual(engine._wafer([], self.stats(3), {"name": "Scratch", "score": 0.6})["verdict"], "recheck")
         self.assertEqual(engine._wafer([], self.stats(3), None)["verdict"], "pass")
 
+    def test_inspection_criteria(self):
+        # docs/specs/inspection-criteria.md 4절
+        self.assertEqual(engine._wafer(["Random"], self.stats(3), None)["verdict"], "pass")   # Random 은 수율로만
+        self.assertEqual(engine._wafer(["Random"], self.stats(5), None)["verdict"], "fail")
+        self.assertEqual(engine._wafer([], self.stats(5), None, limit=0.2)["verdict"], "pass")
+        self.assertEqual(engine._wafer([], self.stats(1), None, long_scratch=3)["verdict"], "recheck")
+
+    def test_yield_limit_from_history(self):
+        from adc import scan_input
+        self.assertEqual(scan_input.yield_limit([0.1, 0.2]), 0.10)                    # 이력 6 장 미만은 고정
+        lim = scan_input.yield_limit([0.05, 0.10, 0.05, 0.10, 0.05, 0.10])
+        self.assertAlmostEqual(lim, 0.075 + 3 * 0.025, places=3)                       # 평균 + 3σ
+
     def test_recheck_die_is_not_model_input(self):
         defects = {d["id"]: {"particle": 1, "scratch": 0, "stain": 0} for d in DIES if d["zone"] == "edge"}
         as_defect = engine.analyze(DIES, WAFER_MODEL, defects)

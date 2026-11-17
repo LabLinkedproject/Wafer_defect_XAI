@@ -57,19 +57,24 @@ def _yield(die_stats: dict) -> dict:
             "defect_die": die_stats["defect"], "active_die": die_stats["active"]}
 
 
-def _wafer(labels: list, stats: dict, suspect) -> dict:
-    """웨이퍼 판정: 패턴 또는 불량 다이 비율 → 불량, 재검사 다이나 의심 → 재검사(사람 판단), 그 밖 양품."""
+def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO, long_scratch: int = 0) -> dict:
+    """웨이퍼 판정 (docs/specs/inspection-criteria.md 4절).
+    Random 외 패턴 → 불량(공정 원인 보류), 불량 다이 비율 ≥ 수율 한계 → 불량,
+    재검사 다이·긴 스크래치·의심 → 재검사(사람 판단), 그 밖 양품. Random 은 수율 기준으로만 본다."""
     ratio = stats["defect"] / (stats["active"] or 1)
-    if labels:
-        v, why = "fail", f"{' + '.join(labels)} 패턴"
-    elif ratio >= WAFER_DEFECT_RATIO:
-        v, why = "fail", f"불량 다이 {stats['defect']}개 ({ratio * 100:.0f} %, 기준 {WAFER_DEFECT_RATIO * 100:.0f} %)"
+    systematic = [l for l in labels if l != "Random"]
+    if systematic:
+        v, why = "fail", f"{' + '.join(systematic)} 패턴 (공정 원인 보류)"
+    elif ratio >= limit:
+        v, why = "fail", f"불량 다이 {stats['defect']}개 ({ratio * 100:.0f} %, 수율 한계 {limit * 100:.0f} %)"
     elif stats["recheck"]:
         v, why = "recheck", f"재검사 다이 {stats['recheck']}개 — 육안 판정 필요"
+    elif long_scratch >= 3:
+        v, why = "recheck", f"다이 {long_scratch}개를 잇는 스크래치 — Scratch 패턴 의심, 육안 판정 필요"
     elif suspect:
         v, why = "recheck", f"{suspect['name']} 의심 (점수 {suspect['score']:.2f}) — 육안 판정 필요"
     else:
-        v, why = "pass", "패턴·불량 다이 기준 미달"
+        v, why = "pass", ("Random 분포, 수율 한계 이내" if labels else "패턴·불량 다이 기준 미달")
     return {"verdict": v, "ko": WAFER_KO[v], "reason": why}
 
 
@@ -131,7 +136,7 @@ def _build_trace(ctx: dict) -> list[dict]:
     return t
 
 
-def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts=None) -> dict:
+def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts=None, wafer_ctx=None) -> dict:
     """dies: scoring.annotate 결과, defects: {다이 id: {유형: 있음}}, answers: [{check, answer}]
     model: 분류기 (없으면 규칙 기반). 학습 모델이면 판정·다이 가림·반사실을 그 모델로 계산한다.
     verdicts: {다이 id: normal|defect|recheck}. 없으면 결함 다이를 모두 불량으로 본다(시나리오)."""
@@ -265,7 +270,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
                    "entropy": h_now, "answered": [a["check"] for a in answers]},
         "risk": risk, "yield": yld, "projected": projected, "recipe": recipe,
         "stain": stain, "detections": detections, "image_size": render.IMAGE_SIZE,
-        "suspect": suspect, "wafer": _wafer(labels, stats, suspect),
+        "suspect": suspect, "wafer": _wafer(labels, stats, suspect, **(wafer_ctx or {})),
         "conclusion": _conclusion(labels, hyp_list[0] if hyp_list else None, dominant_zone, yld["yield_pct"], suspect),
         "trace": trace,
     }
