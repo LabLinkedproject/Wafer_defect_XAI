@@ -57,7 +57,7 @@ class Detect(unittest.TestCase):
         # 2026-11-16 실물: 스테인은 선명한 큰 얼룩(32 mm² 이상), 파티클은 28 mm² 이하였다
         g, meta = clean_map()
         a, b = R.die_slot(die_at(20))
-        cv2.ellipse(g, (b * P + 85, a * P + 80), (26, 19), 20, 0, 360, 60, -1)   # 약 55 mm²
+        cv2.ellipse(g, (b * P + 85, a * P + 80), (30, 22), 20, 0, 360, 60, -1)   # 길이 약 11 mm (스테인 10 mm 이상)
         r = W.detect_array(g, meta)
         self.assertEqual({d["type"] for d in r["defects"] if d["die"] == 20}, {"stain"})
 
@@ -110,7 +110,10 @@ class Detect(unittest.TestCase):
         self.assertEqual(W._kind(False, 26.8, 14.8, 2.1), "stain")      # 반사 마스크에 반쯤 가린 스테인 (길이로)
         self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 길이로
         self.assertEqual(W._kind(False, 45.9, 7.9, 1.3), "particle")    # 큰 마카 점 (21:15 권역 스캔)
-        self.assertEqual(W._kind(False, 70.0, 8.5, 1.1), "stain")       # 면적으로
+        self.assertEqual(W._kind(False, 70.0, 8.5, 1.1), "particle")    # 크기 기준: 10 mm 미만은 넓어도 파티클 (11-17 정의)
+        self.assertEqual(W._kind(False, 24.9, 9.8, 1.6), "particle")    # 붙은 파티클 두 개 (14:46 다이 29)
+        self.assertEqual(W._kind(False, 40.0, 10.0, 1.5), "particle")   # 10 mm 까지 파티클 (11-17 정의)
+        self.assertEqual(W._kind(False, 45.0, 10.5, 1.5), "stain")      # 10 mm 를 넘으면 스테인
         self.assertEqual(W._kind(False, 12.0, 20.0, 6.0), "scratch")    # 길쭉하면 길어도 스크래치
         self.assertEqual(W._kind(True, 5.0, 3.0, 1.0), "stain")         # 번짐 채널
         self.assertEqual(W._kind(True, 60.0, 40.0, 8.0), "scratch")     # 번짐 조각이 붙은 긴 스크래치

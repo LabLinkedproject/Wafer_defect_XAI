@@ -32,8 +32,7 @@ MIN_CONTRAST = 0.05           # 맵 합성 잔차보다 작은 밝기 차이는 
 MIN_STAIN_CONTRAST = 0.02
 MIN_SHARP_AREA = 5            # px
 MIN_STAIN_RATIO = 0.012       # 다이 면적 대비
-STAIN_MIN_AREA_MM2 = 60.0     # 면적만으로 스테인. 21:15 권역 스캔의 마카 파티클이 50 mm² 까지 커서 30 에서 올렸다
-STAIN_MIN_LENGTH_MM = 9.0     # 주 기준: 이 길이 이상이면 스테인. 실물 5 스캔 파티클 최대 8.9, 스테인 최소 9.3 mm
+STAIN_MIN_LENGTH_MM = 10.0    # 크기 기준 (2026-11-17 정의): 10 mm 까지 파티클, 넘으면 스테인(흐림·다이 격자 침범)
 UNSEEN_GAP_MM = 2.0           # 검사 제외 띠 양쪽에서 이만큼 뻗어 조각을 잇는다. 2026-11-16 실물 두 스캔에서 0·1.5·2·2.5·3 mm 중 개수 정확도 최고
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
@@ -228,16 +227,16 @@ def _grid_residual(xs, ys, w, h, area_mm2, P, mm) -> bool:
 
 
 def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:
-    """결함 종류. 번짐 채널이거나, 선명해도 크거나 긴(길쭉하지 않은) 덩어리는 스테인이다.
-    길이 기준: 반사 마스크에 반쯤 가린 스테인은 면적이 26.8 mm² 로 줄었지만 길이는 14.8 mm 였다(2026-11-16 17:41).
-    파티클은 지금까지 최대 8.9 mm."""
+    """결함 종류 (docs/specs/die-verdict.md). 주 기준은 크기다: 길쭉하면 스크래치, 길이 10 mm 를 넘으면 스테인,
+    10 mm 까지는 파티클. 흐린 번짐(번짐 채널이 과반)은 크기와 상관없이 스테인.
+    면적은 쓰지 않는다: 반사 마스크에 반쯤 가린 스테인은 면적만 줄고(26.8 mm²) 길이는 남았다(14.8 mm)."""
     if elong >= SCRATCH_ELONGATION and long_mm >= SCRATCH_MIN_MM:
         return "scratch"          # 다이를 넘어 이은 스크래치에 번짐 조각이 붙어도 스크래치 (2026-11-16 18:20)
     if soft:
         return "stain"
     if elong >= SCRATCH_ELONGATION:
         return "particle"
-    return "stain" if area_mm2 >= STAIN_MIN_AREA_MM2 or long_mm >= STAIN_MIN_LENGTH_MM else "particle"
+    return "stain" if long_mm > STAIN_MIN_LENGTH_MM else "particle"
 
 
 def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z: float = SHARP_Z,
