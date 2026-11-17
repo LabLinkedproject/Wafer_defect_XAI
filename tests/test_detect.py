@@ -54,12 +54,13 @@ class Detect(unittest.TestCase):
         self.assertIn("scratch", {d["type"] for d in r["defects"] if d["die"] == 25})
 
     def test_large_dark_blob_is_stain(self):
-        # 2026-11-16 실물: 스테인은 선명한 큰 얼룩(32 mm² 이상), 파티클은 28 mm² 이하였다
-        g, meta = clean_map()
+        # 크기 기준 (11-17): 10 mm 를 넘는 덩어리는 스테인. 실물처럼 투명 앞면·밝은 격자선·중간 대비로 만든다
+        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
+        g, meta = clean_map(line=25)
         a, b = R.die_slot(die_at(20))
-        cv2.ellipse(g, (b * P + 85, a * P + 80), (30, 22), 20, 0, 360, 60, -1)   # 길이 약 11 mm (스테인 10 mm 이상)
-        r = W.detect_array(g, meta)
-        self.assertEqual({d["type"] for d in r["defects"] if d["die"] == 20}, {"stain"})
+        cv2.ellipse(g, (b * P + 85, a * P + 80), (30, 22), 20, 0, 360, 110, -1)  # 길이 약 11 mm
+        r = W.detect_array(g, meta, **front)
+        self.assertEqual([d["type"] for d in r["defects"] if d["die"] == 20], ["stain"])
 
     def test_die_verdict_by_position(self):
         # docs/specs/die-verdict.md: 중심부 침범 → 불량, 가장자리 띠의 작은 결함 → 재검사, 없음 → 정상
@@ -105,9 +106,20 @@ class Detect(unittest.TestCase):
         self.assertEqual(len({d["obj"] for d in parts}), 1)
         self.assertEqual({d["type"] for d in parts}, {"scratch"})
 
+    def test_scratch_tail_is_absorbed(self):
+        # 2026-11-17 사용자 지적: 스크래치 꼬리가 따로 잡혀 파티클·스테인으로 겹쳐 나왔다. 스크래치 연장선 위의
+        # 작은 조각은 스크래치에 흡수한다 (웨이퍼 단위 판단)
+        mm = 0.1
+        line = {"kind": "scratch", "fx": np.arange(0, 300), "fy": np.full(300, 50), "xs": np.arange(0, 300), "ys": np.full(300, 50)}
+        tail = {"kind": "particle", "fx": np.arange(330, 360), "fy": np.full(30, 52), "xs": np.arange(330, 360), "ys": np.full(30, 52)}
+        far = {"kind": "particle", "fx": np.arange(100, 130), "fy": np.full(30, 120), "xs": np.arange(100, 130), "ys": np.full(30, 120)}
+        out = W._absorb_tails([line, tail, far], mm)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(sorted(o["kind"] for o in out), ["particle", "scratch"])
+        self.assertEqual(len(out[0]["xs"]) + len(out[1]["xs"]), 360)
+
     def test_kind_rules(self):
         self.assertEqual(W._kind(False, 4.0, 2.5, 1.2), "particle")
-        self.assertEqual(W._kind(False, 26.8, 14.8, 2.1), "stain")      # 반사 마스크에 반쯤 가린 스테인 (길이로)
         self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 길이로
         self.assertEqual(W._kind(False, 45.9, 7.9, 1.3), "particle")    # 큰 마카 점 (21:15 권역 스캔)
         self.assertEqual(W._kind(False, 70.0, 8.5, 1.1), "particle")    # 크기 기준: 10 mm 미만은 넓어도 파티클 (11-17 정의)
@@ -117,6 +129,8 @@ class Detect(unittest.TestCase):
         self.assertEqual(W._kind(False, 12.0, 20.0, 6.0), "scratch")    # 길쭉하면 길어도 스크래치
         self.assertEqual(W._kind(True, 5.0, 3.0, 1.0), "stain")         # 번짐 채널
         self.assertEqual(W._kind(True, 60.0, 40.0, 8.0), "scratch")     # 번짐 조각이 붙은 긴 스크래치
+        self.assertEqual(W._kind(False, 56.3, 21.7, 2.6), "scratch")    # 굵은 스크래치: 가늘고 길다 (21.7²/56.3 = 8.4)
+        self.assertEqual(W._kind(False, 41.0, 14.3, 2.9), "stain")      # 흐린 스테인: 10 mm 넘고 덜 가늘다 (5.0)
 
     def test_small_dot_at_die_corner_is_grid_residual(self):
         # 2026-11-16 17:41 실물: 사진 이음매에서 격자선 교차점이 어긋나 다이 모서리마다 작은 점이 오검출됐다

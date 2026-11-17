@@ -36,6 +36,9 @@ STAIN_MIN_LENGTH_MM = 10.0    # 크기 기준 (2026-11-17 정의): 10 mm 까지 
 UNSEEN_GAP_MM = 2.0           # 검사 제외 띠 양쪽에서 이만큼 뻗어 조각을 잇는다. 2026-11-16 실물 두 스캔에서 0·1.5·2·2.5·3 mm 중 개수 정확도 최고
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
+SCRATCH_SLENDER = 7.0         # 10 mm 넘는 결함은 길이²/면적(가는 정도)이 이 이상이면 스크래치. 실물 스테인 ≤ 5.3, 스크래치 ≥ 8.3
+SCRATCH_CORRIDOR_MM = 2.5     # 스크래치 연장선에서 이 거리 안의 작은 조각은 그 스크래치의 꼬리다
+SCRATCH_TAIL_MM = 8.0         # 스크래치 끝에서 이만큼 더 나간 곳까지 꼬리로 본다
 HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
 HEAVY_QUADRAT_COUNT = 3
 LINE_GUARD_MM = 5.0           # 다이 경계선에서 이 거리 안의 가는 성분은 격자선 잔차
@@ -45,7 +48,9 @@ CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 
 EDGE_BAND_MM = 4.0            # 다이 가장자리 띠. 안쪽 24×24 mm 가 중심부 (docs/specs/die-verdict.md)
 DEFECT_AREA_RATIO = 0.05      # 다이 안 결함 면적이 이 비율 이상이면 위치와 상관없이 불량
 FULL_DARK = 0.2               # 합성 전체 이미지에서 주변보다 이 비율 이상 어두우면 결함 몸체 (스크래치·스테인 10 % 지점 0.21~0.24)
-GROW_LIMIT_MM = 4.0           # 다이 비교 씨앗에서 이 거리 안에서만 몸체를 따라간다 (렌즈 점·웨이퍼 밖 어둠은 멀리 있다)
+GROW_LIMIT_MM = 4.0           # 다이 비교 씨앗에서 이 거리 안에서만 몸체를 따라간다 (검사한 다이 안의 반사 띠·스크라이브)
+GROW_FAR_MM = 12.0            # 검사 못 한 다이 자리에서는 더 멀리 따라간다 (11-17: 다이 23 을 지나는 스크래치 꼬리).
+                              # 검사한 다이 안까지 12 mm 로 늘리자 스테인이 반사 띠를 따라 길어져 스크래치가 됐다
 GROW_RATIO = 0.6              # 이중 문턱의 낮은 쪽 (높은 문턱 대비)
 DARK_BACKGROUND = 120          # 격자선 밝기 정보가 없는 예전 맵: 웨이퍼 안쪽 중앙값이 이보다 어두우면 투명 앞면
 CHROMA_GAIN = 3.0             # R−B 차이를 밝기 영상 범위로 늘리는 배율
@@ -230,7 +235,9 @@ def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:
     """결함 종류 (docs/specs/die-verdict.md). 주 기준은 크기다: 길쭉하면 스크래치, 길이 10 mm 를 넘으면 스테인,
     10 mm 까지는 파티클. 흐린 번짐(번짐 채널이 과반)은 크기와 상관없이 스테인.
     면적은 쓰지 않는다: 반사 마스크에 반쯤 가린 스테인은 면적만 줄고(26.8 mm²) 길이는 남았다(14.8 mm)."""
-    if elong >= SCRATCH_ELONGATION and long_mm >= SCRATCH_MIN_MM:
+    slender = long_mm * long_mm / max(area_mm2, 1e-6)
+    if long_mm >= SCRATCH_MIN_MM and (elong >= SCRATCH_ELONGATION
+                                      or (long_mm > STAIN_MIN_LENGTH_MM and slender >= SCRATCH_SLENDER)):
         return "scratch"          # 다이를 넘어 이은 스크래치에 번짐 조각이 붙어도 스크래치 (2026-11-16 18:20)
     if soft:
         return "stain"
@@ -279,6 +286,48 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
                     c["soft_px"] |= comp
 
 
+def _within(mask: np.ndarray, r: float) -> np.ndarray:
+    """mask 에서 거리 r px 안. 큰 원형 팽창(지름 325 px)은 전체 이미지에서 너무 무거워 거리 변환으로 잰다."""
+    return cv2.distanceTransform((~mask).astype(np.uint8), cv2.DIST_L2, 5) <= r
+
+
+def _absorb_tails(objs: list[dict], mm: float) -> list[dict]:
+    """스크래치 연장선 위의 작은 조각(파티클·스테인으로 분류된 꼬리)을 그 스크래치에 흡수한다.
+    스크래치 패턴에 파티클·스테인이 겹쳐 나오면 안 된다 (2026-11-17 사용자 지시). objs: fx·fy(모양), xs·ys(씨앗), kind."""
+    cor, tail = SCRATCH_CORRIDOR_MM / mm, SCRATCH_TAIL_MM / mm
+    keep = [o for o in objs if o["kind"] == "scratch"]
+    for s in keep:
+        p = np.column_stack([s["fx"], s["fy"]]).astype(np.float64)
+        s["_c"] = p.mean(0)
+        s["_u"] = np.linalg.svd(p - s["_c"], full_matrices=False)[2][0]
+        t = (p - s["_c"]) @ s["_u"]
+        s["_t"] = (t.min(), t.max())
+    out = []
+    for o in objs:
+        if o["kind"] == "scratch":
+            continue
+        q = np.column_stack([o["fx"], o["fy"]]).astype(np.float64)
+        host = None
+        for s in keep:
+            d = q - s["_c"]
+            t = d @ s["_u"]
+            off = np.abs(d @ np.array([-s["_u"][1], s["_u"][0]]))
+            if off.max() <= cor and t.min() >= s["_t"][0] - tail and t.max() <= s["_t"][1] + tail:
+                host = s
+                break
+        if host is None:
+            out.append(o)
+            continue
+        for k in ("fx", "fy", "xs", "ys"):
+            host[k] = np.concatenate([host[k], o[k]])
+    for s in keep:
+        t = (np.column_stack([s["fx"], s["fy"]]) - s["_c"]) @ s["_u"]
+        s["long_mm"] = float(np.ptp(t)) * mm
+        for k in ("_c", "_u", "_t"):
+            s.pop(k)
+    return keep + out
+
+
 def die_verdict(center_hit: bool, area_ratio: float) -> str:
     """다이 판정 (docs/specs/die-verdict.md). 재검사는 회생 가능할 수 있어 사람이 정한다."""
     if center_hit or area_ratio >= DEFECT_AREA_RATIO:
@@ -307,27 +356,31 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
         soft[win] |= c["soft_px"]
         known[win] |= c["mask"]
     img = img.astype(np.float32)
-    bg = cv2.GaussianBlur(img, (0, 0), P / 6)
+    # 넓은 배경은 1/4 로 줄여 흐린 뒤 키운다 (전체 이미지 시그마 72 px 흐림이 보드를 오래 붙잡았다, 11-17 재부팅)
+    small = cv2.resize(img, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    bg = cv2.resize(cv2.GaussianBlur(small, (0, 0), P / 24), (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
     dark = ((bg - img) / np.maximum(bg, 1.0) > FULL_DARK) & (img > BACKGROUND_MAX)     # 미촬영(검정) 자리는 뺀다
     if not follow_dark:
         dark[:] = False
     elif ref is not None:
         rb = cv2.GaussianBlur(ref.astype(np.float32), (0, 0), P / 6)
         static = cv2.dilate(((rb - ref) / np.maximum(rb, 1.0) > FULL_DARK).astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
-        for c in crops.values():
-            dark[c["y"]:c["y"] + P, c["x"]:c["x"] + P] &= ~static
+        for d in die_layout():                         # 검사 못 한 다이 자리에도 렌즈 점은 같은 자리에 있다
+            r, c = R.die_slot(d)
+            dark[r * P:(r + 1) * P, c * P:(c + 1) * P] &= ~static
     seeds = defect.astype(np.uint8)
     lim = int(round(GROW_LIMIT_MM / mm))
     # 몸체는 다이 비교로 볼 수 없던 곳(스크라이브·반사 띠)에서만 따라간다. 검사한 곳에서 비교 검출이 끊었다면
     # 실제로 떨어진 결함이다 (가까운 파티클 두 개가 하나의 스테인으로 이어졌다, 2026-11-16 14:46 다이 32)
-    near = cv2.dilate(seeds, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * lim + 1,) * 2)) > 0
+    incrop = np.zeros(shape, bool)
+    for c in crops.values():
+        incrop[c["y"]:c["y"] + P, c["x"]:c["x"] + P] = True
+    near = _within(seeds > 0, lim) | (_within(seeds > 0, int(round(GROW_FAR_MM / mm))) & ~incrop)
     body = defect | (dark & near & ~known)
     gap = max(int(round(UNSEEN_GAP_MM / mm)), SCRIBE_MARGIN + 2)    # 스크라이브 여백(px)은 최소 넘어 잇는다
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * gap + 1, 2 * gap + 1))
-    grown = body | (~known & (cv2.dilate(body.astype(np.uint8), k) > 0))
+    grown = body | (~known & _within(body, gap))
     n, lab, stats, _ = cv2.connectedComponentsWithStats(grown.astype(np.uint8), connectivity=8)
-    band = int(round(EDGE_BAND_MM / mm))
-    found, parts, obj = [], {}, 0
+    objs = []
     for i in range(1, n):
         x0, y0, bw, bh = stats[i, :4]
         win = np.s_[y0:y0 + bh, x0:x0 + bw]
@@ -342,7 +395,14 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
         n_soft = int((soft[win] & mine).sum())
         kind = _kind(n_soft * 2 > int(mine.sum()), len(fx) * mm * mm, long_mm, max(w, h) / max(min(w, h), 1.0))
         ys, xs = np.nonzero(mine & defect[win])           # 다이 판정은 다이 비교 검출 픽셀로만
-        xs, ys, obj = xs + x0, ys + y0, obj + 1
+        objs.append({"kind": kind, "long_mm": long_mm, "fx": fx + x0, "fy": fy + y0, "xs": xs + x0, "ys": ys + y0})
+    objs = _absorb_tails(objs, mm)
+
+    # 2차: 다이 단위 판정
+    band = int(round(EDGE_BAND_MM / mm))
+    found, parts = [], {}
+    for obj, o in enumerate(objs, 1):
+        kind, long_mm, xs, ys = o["kind"], o["long_mm"], o["xs"], o["ys"]
         for c in crops.values():
             inside = (xs >= c["x"]) & (xs < c["x"] + P) & (ys >= c["y"]) & (ys < c["y"] + P)
             if not inside.any():
