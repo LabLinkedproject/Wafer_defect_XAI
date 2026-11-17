@@ -48,6 +48,7 @@ CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 
 EDGE_BAND_MM = 4.0            # 다이 가장자리 띠. 안쪽 24×24 mm 가 중심부 (docs/specs/die-verdict.md)
 DEFECT_AREA_RATIO = 0.05      # 다이 안 결함 면적이 이 비율 이상이면 위치와 상관없이 불량
 # 가장자리 띠에만 있을 때 종류별 기준 (docs/specs/inspection-criteria.md 3절)
+CENTER_MIN_MM2 = 1.0          # 회로 영역(중심부)에 이 면적 이상 들어와야 침범 (최소 검출 크기와 같다)
 EDGE_SCRATCH_MM = 16.0        # 띠 안 스크래치가 다이 한 변의 절반 이상이면 불량 (실링을 따라 긁힘)
 EDGE_STAIN_RATIO = 0.025      # 띠 안 스테인이 다이 면적의 2.5 % 이상이면 불량 (넓은 오염)
 GDBN_MIN = 5                  # 정상 다이라도 8 방향 이웃 중 불량이 이 수 이상이면 재검사 (GDBN 현지화)
@@ -485,7 +486,8 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
             if not inside.any():
                 continue
             px, py = xs[inside] - c["x"], ys[inside] - c["y"]
-            center = bool(((px >= band) & (px < P - band) & (py >= band) & (py < P - band)).any())
+            # 회로 영역에 1 mm² 이상 들어와야 침범이다. 선 가장자리가 경계를 몇 px 넘은 것까지 불량으로 보지 않는다
+            center = int(((px >= band) & (px < P - band) & (py >= band) & (py < P - band)).sum()) * mm * mm >= CENTER_MIN_MM2
             did = c["die"]["id"]
             p = parts.setdefault(did, [0, False, 0.0, 0])
             p[0] += int(inside.sum())
