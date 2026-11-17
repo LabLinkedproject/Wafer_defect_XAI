@@ -36,6 +36,7 @@ STAIN_MIN_LENGTH_MM = 10.0    # 크기 기준 (2026-11-17 정의): 10 mm 까지 
 UNSEEN_GAP_MM = 2.0           # 검사 제외 띠 양쪽에서 이만큼 뻗어 조각을 잇는다. 2026-11-16 실물 두 스캔에서 0·1.5·2·2.5·3 mm 중 개수 정확도 최고
 SCRATCH_ELONGATION = 3.5
 SCRATCH_MIN_MM = 4.0
+SCRATCH_MAX_WIDTH_MM = 3.3    # 스크래치 평균 폭(면적/길이) 상한. 실물 스크래치 ≤ 3.17(교차), 도넛 스테인의 호 ≥ 3.7 mm (11-17)
 SCRATCH_SLENDER = 7.0         # 10 mm 넘는 결함은 길이²/면적(가는 정도)이 이 이상이면 스크래치. 실물 스테인 ≤ 5.3, 스크래치 ≥ 8.3
 SCRATCH_CORRIDOR_MM = 2.5     # 스크래치 연장선에서 이 거리 안의 작은 조각은 그 스크래치의 꼬리다
 SCRATCH_TAIL_MM = 8.0         # 스크래치 끝에서 이만큼 더 나간 곳까지 꼬리로 본다
@@ -244,13 +245,12 @@ def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:
     10 mm 까지는 파티클. 흐린 번짐(번짐 채널이 과반)은 크기와 상관없이 스테인.
     면적은 쓰지 않는다: 반사 마스크에 반쯤 가린 스테인은 면적만 줄고(26.8 mm²) 길이는 남았다(14.8 mm)."""
     slender = long_mm * long_mm / max(area_mm2, 1e-6)
-    if long_mm >= SCRATCH_MIN_MM and (elong >= SCRATCH_ELONGATION
-                                      or (long_mm > STAIN_MIN_LENGTH_MM and slender >= SCRATCH_SLENDER)):
+    thin = area_mm2 / max(long_mm, 1e-6) <= SCRATCH_MAX_WIDTH_MM       # 스크래치는 가는 선이다
+    if long_mm >= SCRATCH_MIN_MM and thin and (elong >= SCRATCH_ELONGATION
+                                               or (long_mm > STAIN_MIN_LENGTH_MM and slender >= SCRATCH_SLENDER)):
         return "scratch"          # 다이를 넘어 이은 스크래치에 번짐 조각이 붙어도 스크래치 (2026-11-16 18:20)
     if soft:
         return "stain"
-    if elong >= SCRATCH_ELONGATION:
-        return "particle"
     return "stain" if long_mm > STAIN_MIN_LENGTH_MM else "particle"
 
 

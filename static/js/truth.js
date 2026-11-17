@@ -25,11 +25,12 @@
 
   function show(t, cmp) {
     const out = $("truth-result");
-    if (!t || !cmp) { out.textContent = "아직 기록이 없습니다."; return; }
+    if (!t) { out.textContent = "아직 기록이 없습니다."; return; }
     const list = (a) => (a.length ? a.join(", ") : "없음");
-    let html = `<b>검출</b> TP ${cmp.tp.length} · FN ${cmp.fn.length} · FP ${cmp.fp.length} · TN ${cmp.tn}` +
-      ` — 놓침: ${list(cmp.fn)} / 오검출: ${list(cmp.fp)} / 종류 일치 ${cmp.type_match.length}/${cmp.tp.length}`;
-    if (cmp.not_inspected.length) html += ` / 검사 못 한 다이: ${list(cmp.not_inspected)}`;
+    let html = !cmp ? "<b>검출</b> 정답 다이 목록이 없어 다이 단위 비교는 하지 않았습니다 (패턴만 평가)"
+      : `<b>검출</b> TP ${cmp.tp.length} · FN ${cmp.fn.length} · FP ${cmp.fp.length} · TN ${cmp.tn}` +
+        ` — 놓침: ${list(cmp.fn)} / 오검출: ${list(cmp.fp)} / 종류 일치 ${cmp.type_match.length}/${cmp.tp.length}`;
+    if (cmp && cmp.not_inspected.length) html += ` / 검사 못 한 다이: ${list(cmp.not_inspected)}`;
     if (t.patterns.length) {
       const hit = t.patterns.filter((p) => judged.includes(p));
       const extra = judged.filter((p) => !t.patterns.includes(p));

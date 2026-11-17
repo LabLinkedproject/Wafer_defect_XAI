@@ -152,6 +152,8 @@ class Detect(unittest.TestCase):
         self.assertEqual(W._kind(False, 12.0, 20.0, 6.0), "scratch")    # 길쭉하면 길어도 스크래치
         self.assertEqual(W._kind(True, 5.0, 3.0, 1.0), "stain")         # 번짐 채널
         self.assertEqual(W._kind(True, 60.0, 40.0, 8.0), "scratch")     # 번짐 조각이 붙은 긴 스크래치
+        self.assertEqual(W._kind(False, 870.0, 132.6, 4.4), "stain")    # 도넛 스테인의 넓은 호 (평균 폭 6.6 mm, 11-17)
+        self.assertEqual(W._kind(False, 320.0, 101.4, 3.2), "scratch")  # 교차한 두 스크래치 (평균 폭 3.17 mm)
         self.assertEqual(W._kind(False, 56.3, 21.7, 2.6), "scratch")    # 굵은 스크래치: 가늘고 길다 (21.7²/56.3 = 8.4)
         self.assertEqual(W._kind(False, 41.0, 14.3, 2.9), "stain")      # 흐린 스테인: 10 mm 넘고 덜 가늘다 (5.0)
 

@@ -82,7 +82,9 @@ def save(scan_id: str, data: dict) -> dict:
 def compare(scan_id: str, truth: dict | None = None) -> dict | None:
     """정답과 검출 결과의 다이 단위 비교. 검사하지 못한 다이는 세지 않는다."""
     truth = truth or load(scan_id)
-    if truth is None:
+    if truth is None or (not truth["dies"] and truth["patterns"]):
+        # 패턴만 적은 정답(다이 목록 없음)은 다이 단위로 비교하지 않는다 (11-17 오검출 19·24 오기록).
+        # 다이도 패턴도 없으면 깨끗한 웨이퍼 정답이라 그대로 비교한다
         return None
     det = scan_input.detect(scan_id)
     inspected = set(det["inspected"])
@@ -121,10 +123,13 @@ def record(scan_id: str) -> dict | None:
         return None
     c = compare(scan_id, t)
     det = scan_input.detect(scan_id)
+    judged = t.get("judged", [])
     ev = {"time": datetime.now().isoformat(timespec="seconds"), "scan": os.path.basename(scan_id), "stage": t["stage"],
-          "tp": len(c["tp"]), "fn": len(c["fn"]), "fp": len(c["fp"]), "tn": c["tn"],
-          "dies": {"tp": c["tp"], "fn": c["fn"], "fp": c["fp"], "not_inspected": c["not_inspected"]},
-          "type_match": len(c["type_match"]), "patterns": t["patterns"], "judged": t.get("judged", []),
+          "tp": len(c["tp"]) if c else None, "fn": len(c["fn"]) if c else None,
+          "fp": len(c["fp"]) if c else None, "tn": c["tn"] if c else None,
+          "dies": {"tp": c["tp"], "fn": c["fn"], "fp": c["fp"], "not_inspected": c["not_inspected"]} if c else None,
+          "type_match": len(c["type_match"]) if c else None, "patterns": t["patterns"], "judged": judged,
+          "pattern_ok": set(t["patterns"]) <= set(judged) if t["patterns"] else None,
           "channel": det.get("channel"), "reference": det.get("reference"), "detect_version": det.get("version")}
     t["evaluation"] = ev
     _write_json(_path(scan_id), t)
@@ -164,8 +169,9 @@ def summary() -> dict:
     out = {"scans": len(rows), "stages": {}}
     for stage in STAGES:
         rs = [r for r in rows if r["stage"] == stage and "cmp" in r]
-        tp = sum(len(r["cmp"]["tp"]) for r in rs); fn = sum(len(r["cmp"]["fn"]) for r in rs)
-        fp = sum(len(r["cmp"]["fp"]) for r in rs); tn = sum(r["cmp"]["tn"] for r in rs)
+        rd = [r for r in rs if r["cmp"]]                      # 다이 목록이 있는 정답만 다이 단위로 센다
+        tp = sum(len(r["cmp"]["tp"]) for r in rd); fn = sum(len(r["cmp"]["fn"]) for r in rd)
+        fp = sum(len(r["cmp"]["fp"]) for r in rd); tn = sum(r["cmp"]["tn"] for r in rd)
         per_type = {k: 0 for k in DEFECT_TYPES}
         for r in rs:
             for kinds in r["truth"]["dies"].values():
@@ -182,7 +188,7 @@ def summary() -> dict:
                 per_pattern[key] = per_pattern.get(key, 0) + 1
                 pat_ok += set(want) <= set(r["truth"].get("judged", []))
         out["stages"][stage] = {"scans": len(rs), "tp": tp, "fn": fn, "fp": fp, "tn": tn,
-                                "type_match": sum(len(r["cmp"]["type_match"]) for r in rs),
+                                "type_match": sum(len(r["cmp"]["type_match"]) for r in rd),
                                 "miss": _bound(fn, tp + fn), "false_alarm": _bound(fp, fp + tn),
                                 "per_type": per_type, "per_pattern": per_pattern,
                                 "pattern_ok": pat_ok, "pattern_n": pat_n}

@@ -134,6 +134,28 @@ class WaferVerdict(unittest.TestCase):
         self.assertIn("Scratch", seen["wafer"]["reason"])
         self.assertTrue(next(p for p in seen["patterns"] if p["name"] == "Scratch")["is_label"])
 
+    def test_truth_without_dies_skips_die_evaluation(self):
+        # 11-17: 패턴만 적은 정답(다이 목록 없음)을 '결함 다이 0 개'로 보고 오검출 19·24 로 기록했다
+        import tempfile, os, json
+        from adc import truth, scan_input
+        d = tempfile.mkdtemp()
+        sid = "x_scan"
+        os.makedirs(os.path.join(d, sid))
+        old = scan_input.scan_dir, scan_input.detect
+        scan_input.scan_dir = lambda s: os.path.join(d, s)
+        scan_input.detect = lambda s: {"inspected": [1, 2, 3], "defects": [{"die": 2, "type": "stain"}], "channel": "g"}
+        try:
+            truth.save(sid, {"stage": 2, "dies": {}, "patterns": ["Donut"], "judged": ["Donut"]})
+            ev = truth.record(sid)
+            self.assertIsNone(ev["fp"])
+            self.assertTrue(ev["pattern_ok"])
+            with open(os.path.join(d, truth.EVAL_LOG)) as f:
+                self.assertIsNone(json.loads(f.readline())["fp"])
+            truth.save(sid, {"stage": 1, "dies": {}, "patterns": []})          # 깨끗한 웨이퍼 정답은 그대로 비교
+            self.assertEqual(truth.record(sid)["fp"], 1)
+        finally:
+            scan_input.scan_dir, scan_input.detect = old
+
     def test_yield_limit_from_history(self):
         from adc import scan_input
         self.assertEqual(scan_input.yield_limit([0.1, 0.2]), 0.10)                    # 이력 6 장 미만은 고정
