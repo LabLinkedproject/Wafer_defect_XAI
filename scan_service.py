@@ -60,6 +60,9 @@ class ScanService:
         self._thread: threading.Thread | None = None
         self._g: Gantry | None = None
         self._stop = False
+        # 원점 확인: 위치 센서가 없어 손으로 맞춘 원점을 시스템이 모른다. 서버를 켠 뒤·정지·초기화 뒤에는
+        # '여기를 원점으로'를 누르기 전까지 스캔을 막는다 (11-17: 등록 안 된 원점으로 스캔이 엇나갔다)
+        self.origin_confirmed = False
         self.job = {"name": None, "busy": False, "message": "대기 중", "error": None,
                     "progress": 0, "total": 0, "started": None, "finished": None}
         self.scan = {"dir": None, "results": [], "preview": []}
@@ -109,6 +112,7 @@ class ScanService:
             "gpio_access": self.gpio_access(),
             "state_writable": self.state_writable(),
             "origin_set": st is not None,
+            "origin_confirmed": self.origin_confirmed,
             "position": None if st is None else {"x": st["x_mm"], "y": st["y_mm"]},
             "calibrated": None if st is None else {a: bool(st.get(f"calibrated_{a}")) for a in "xy"},
             "limits": {"x": [xl, xh], "y": [yl, yh]},
@@ -303,6 +307,7 @@ class ScanService:
 
     def stop(self):
         self._stop = True
+        self.origin_confirmed = False
         if self._g is not None:
             self._g.stop_requested = True
 
@@ -354,6 +359,7 @@ class ScanService:
         st = self._state()
         st["x_mm"], st["y_mm"] = 0.0, 0.0
         gcli.save_state(st)
+        self.origin_confirmed = True
         return scan_config.update(wafer_center_x=0.0, wafer_center_y=0.0)
 
     # ── 촬영 ───────────────────────────────────────────────────────
@@ -380,6 +386,8 @@ class ScanService:
 
     def start_scan(self):
         """원클릭 스캔: 웨이퍼 중심 → 44개 다이를 지그재그로 돌며 정지·촬영 → 웨이퍼 중심 복귀."""
+        if not self.origin_confirmed:
+            raise JobError("원점을 확인하세요: 갠트리를 웨이퍼 정중앙에 두고 장비 패널의 '여기를 원점으로'를 누른 뒤 시작합니다.")
         plan = self.plan()
         if not plan["all_in_limits"]:
             raise JobError("일부 다이 위치가 갠트리 범위 밖입니다. 웨이퍼 중심 설정을 확인하세요.")

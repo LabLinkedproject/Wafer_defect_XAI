@@ -121,7 +121,7 @@
   function render() {
     const s = status;
     chip($("chipGpio"), s.gpio_access ? "ok" : "bad", s.gpio_access ? "GPIO 권한" : "GPIO 권한 없음");
-    chip($("chipOrigin"), s.origin_set ? "ok" : "bad", s.origin_set ? "원점 지정됨" : "원점 미지정");
+    chip($("chipOrigin"), s.origin_confirmed ? "ok" : "bad", s.origin_confirmed ? "원점 확인됨" : "원점 확인 필요");
     const cal = s.calibrated && s.calibrated.x && s.calibrated.y;
     chip($("chipCal"), cal ? "ok" : "warn", cal ? "거리 보정됨" : "거리 미보정");
     $("chipDry").hidden = !s.dry_run;
@@ -131,6 +131,8 @@
                  "sudo /home/orangepi/motor_test/install_gpio_access.sh  (그 뒤 이 서버를 재시작)");
     } else if (!s.origin_set) {
       showBanner("원점이 없습니다. 갠트리를 손으로 중앙에 두고 터미널에서 'gantry.sh set-center --micro 8' 을 실행하세요.");
+    } else if (!s.origin_confirmed && !s.job.busy) {
+      showBanner("원점을 확인하세요: 갠트리를 웨이퍼 정중앙(22·23·29·30번 다이가 만나는 점)에 두고 장비 패널의 '여기를 원점으로'를 누르세요. 서버를 켠 뒤·정지·초기화 뒤에는 매번 필요합니다.");
     } else if (s.job.error) {
       showBanner(s.job.error);
     } else if (!plan?.all_in_limits) {
@@ -157,7 +159,7 @@
     for (const id of ["btnScan", "btnOrigin", "btnSetOrigin"]) {
       $(id).disabled = !ready;
     }
-    $("btnScan").disabled = !ready || !plan?.all_in_limits;
+    $("btnScan").disabled = !ready || !plan?.all_in_limits || !s.origin_confirmed;
     document.querySelectorAll(".jog").forEach((b) => (b.disabled = !ready));
     $("btnStop").disabled = !busy;
     $("btnReset").disabled = !(s.gpio_access && s.origin_set);       // 작업 중에도 누를 수 있다 (멈추고 복귀)
