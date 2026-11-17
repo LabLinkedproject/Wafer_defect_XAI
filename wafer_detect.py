@@ -51,6 +51,8 @@ FULL_DARK = 0.2               # 합성 전체 이미지에서 주변보다 이 �
 GROW_LIMIT_MM = 4.0           # 다이 비교 씨앗에서 이 거리 안에서만 몸체를 따라간다 (검사한 다이 안의 반사 띠·스크라이브)
 GROW_FAR_MM = 12.0            # 검사 못 한 다이 자리에서는 더 멀리 따라간다 (11-17: 다이 23 을 지나는 스크래치 꼬리).
                               # 검사한 다이 안까지 12 mm 로 늘리자 스테인이 반사 띠를 따라 길어져 스크래치가 됐다
+THIN_WIDTH_MM = 1.5           # 씨앗의 평균 폭(면적/길이)이 이하면 선 모양 (스크래치 조각 1.0~1.1, 스테인 ≥ 2.7 mm)
+RIM_MARGIN_MM = 8.0           # 웨이퍼 테두리에서 이 거리 안은 멀리 따라가지 않는다 (테두리 어둠)
 GROW_RATIO = 0.6              # 이중 문턱의 낮은 쪽 (높은 문턱 대비)
 DARK_BACKGROUND = 120          # 격자선 밝기 정보가 없는 예전 맵: 웨이퍼 안쪽 중앙값이 이보다 어두우면 투명 앞면
 CHROMA_GAIN = 3.0             # R−B 차이를 밝기 영상 범위로 늘리는 배율
@@ -372,10 +374,28 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
     lim = int(round(GROW_LIMIT_MM / mm))
     # 몸체는 다이 비교로 볼 수 없던 곳(스크라이브·반사 띠)에서만 따라간다. 검사한 곳에서 비교 검출이 끊었다면
     # 실제로 떨어진 결함이다 (가까운 파티클 두 개가 하나의 스테인으로 이어졌다, 2026-11-16 14:46 다이 32)
-    incrop = np.zeros(shape, bool)
+    # 멀리 따라가기는 검사한 다이 밖이면서 웨이퍼 테두리에서 떨어진 곳만. 웨이퍼 밖 테두리의 어둠을 따라가면
+    # 가장자리 스테인이 길어져 스크래치가 됐다 (11-17 16:50 스캔 다이 22)
+    far_ok = np.ones(shape, bool)
     for c in crops.values():
-        incrop[c["y"]:c["y"] + P, c["x"]:c["x"] + P] = True
-    near = _within(seeds > 0, lim) | (_within(seeds > 0, int(round(GROW_FAR_MM / mm))) & ~incrop)
+        far_ok[c["y"]:c["y"] + P, c["x"]:c["x"] + P] = False
+    yy, xx = np.ogrid[:shape[0], :shape[1]]
+    h = R.GRID_DIES / 2 * P
+    far_ok &= np.hypot(xx - h, yy - h) * mm <= WAFER_MODEL["diameter_mm"] / 2 - RIM_MARGIN_MM
+    # 멀리 따라가는 것은 가는 선 모양 씨앗(스크래치 조각)뿐이다. 덩어리(스테인)는 4 mm 만
+    # (스테인이 웨이퍼 가장자리 빈자리로 길어져 스크래치가 됐다, 11-17 16:50 스캔 다이 23)
+    thin = np.zeros(shape, bool)
+    ns, slab, sst, _ = cv2.connectedComponentsWithStats(seeds, connectivity=8)
+    for i in range(1, ns):
+        x0, y0, bw, bh = sst[i, :4]
+        py, px = np.nonzero(slab[y0:y0 + bh, x0:x0 + bw] == i)
+        if len(px) < MIN_SHARP_AREA:
+            continue
+        (_, _), (w, h), _ = cv2.minAreaRect(np.column_stack([px, py]).astype(np.float32))
+        length = max(w, h, 1.0)
+        if length * mm >= SCRATCH_MIN_MM and len(px) / length * mm <= THIN_WIDTH_MM:     # 평균 폭이 가늘면 선
+            thin[y0:y0 + bh, x0:x0 + bw] |= slab[y0:y0 + bh, x0:x0 + bw] == i
+    near = _within(seeds > 0, lim) | (_within(thin, int(round(GROW_FAR_MM / mm))) & far_ok)
     body = defect | (dark & near & ~known)
     gap = max(int(round(UNSEEN_GAP_MM / mm)), SCRIBE_MARGIN + 2)    # 스크라이브 여백(px)은 최소 넘어 잇는다
     grown = body | (~known & _within(body, gap))
