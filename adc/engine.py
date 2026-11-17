@@ -33,6 +33,7 @@ _CHECK = {c["id"]: c for c in CHECKS}
 
 WAFER_DEFECT_RATIO = 0.10     # 불량 다이가 검사 다이의 이 비율 이상이면 웨이퍼 불량 (docs/specs/die-verdict.md)
 WAFER_KO = {"pass": "양품", "fail": "불량", "recheck": "재검사"}
+LONG_SCRATCH_DIES = 3          # 전체 이미지에서 이 수 이상 다이를 잇는 스크래치는 Scratch 패턴
 
 
 def _risk(die_stats: dict, top: str | None) -> dict:
@@ -57,7 +58,7 @@ def _yield(die_stats: dict) -> dict:
             "defect_die": die_stats["defect"], "active_die": die_stats["active"]}
 
 
-def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO, long_scratch: int = 0) -> dict:
+def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO) -> dict:
     """웨이퍼 판정 (docs/specs/inspection-criteria.md 4절).
     Random 외 패턴 → 불량(공정 원인 보류), 불량 다이 비율 ≥ 수율 한계 → 불량,
     재검사 다이·긴 스크래치·의심 → 재검사(사람 판단), 그 밖 양품. Random 은 수율 기준으로만 본다."""
@@ -69,8 +70,6 @@ def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO
         v, why = "fail", f"불량 다이 {stats['defect']}개 ({ratio * 100:.0f} %, 수율 한계 {limit * 100:.0f} %)"
     elif stats["recheck"]:
         v, why = "recheck", f"재검사 다이 {stats['recheck']}개 — 육안 판정 필요"
-    elif long_scratch >= 3:
-        v, why = "recheck", f"다이 {long_scratch}개를 잇는 스크래치 — Scratch 패턴 의심, 육안 판정 필요"
     elif suspect:
         v, why = "recheck", f"{suspect['name']} 의심 (점수 {suspect['score']:.2f}) — 육안 판정 필요"
     else:
@@ -148,6 +147,14 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
     model = model or S.RuleModel(dies, {i: c for i, c in defects.items() if verdicts.get(i) == "defect"})
     scores = model.scores()
     labels = S.labels_from(scores, model)
+    # 전체 이미지 분석의 패턴 근거: 3 다이 이상 이어진 스크래치는 Scratch 패턴이다. 모델(WM-811K 학습)은 웨이퍼를
+    # 가로지르는 긴 스크래치를 Local 로 읽었다 (11-17 실물). 모델 점수는 바꾸지 않고 근거와 함께 라벨만 더한다
+    ctx = dict(wafer_ctx or {})
+    n_long = ctx.pop("long_scratch", 0)
+    image_patterns = {}
+    if n_long >= LONG_SCRATCH_DIES:
+        image_patterns["Scratch"] = f"전체 이미지 분석: 다이 {n_long}개를 잇는 스크래치"
+        labels = ["Scratch"] + [l for l in labels if l != "Scratch"]
     ordered = sorted(PATTERNS, key=lambda c: scores[c]["score"], reverse=True)
     top = labels[0] if labels else None
     second = scores[ordered[1]]["score"]
@@ -196,7 +203,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
     hyp_list, checks, history, converged, h_now = [], [], [], False, None
     image_belief = None
     if labels:
-        evidence = {c: scores[c]["score"] for c in PATTERNS}
+        evidence = {c: (1.0 if c in image_patterns else scores[c]["score"]) for c in PATTERNS}
         image_belief = B.prior_from_evidence(evidence, shares)
         cur = dict(image_belief)
         asked = set()
@@ -261,7 +268,9 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
         "dominant_zone": dominant_zone, "dominant_type": dominant_type,
         "threshold": LABEL_THRESHOLD,
         "patterns": [{"name": c, **PATTERNS[c], "score": scores[c]["score"], "channel": scores[c]["channel"],
-                      "threshold": model.threshold(c), "is_label": c in labels} for c in PATTERNS],
+                      "threshold": model.threshold(c), "is_label": c in labels, "by_image": image_patterns.get(c)}
+                     for c in PATTERNS],
+        "image_patterns": image_patterns,
         "labels": labels, "top": top, "top_score": top_score, "margin": margin, "ambiguous": bool(labels) and margin < 0.2,
         "xai": {"target": tgt, "score": scores[tgt]["score"], "logit": scores[tgt]["logit"], "bias": scores[tgt]["bias"],
                 "channel": scores[tgt]["channel"], "contributions": scores[tgt]["contributions"],
@@ -270,7 +279,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
                    "entropy": h_now, "answered": [a["check"] for a in answers]},
         "risk": risk, "yield": yld, "projected": projected, "recipe": recipe,
         "stain": stain, "detections": detections, "image_size": render.IMAGE_SIZE,
-        "suspect": suspect, "wafer": _wafer(labels, stats, suspect, **(wafer_ctx or {})),
+        "suspect": suspect, "wafer": _wafer(labels, stats, suspect, **ctx),
         "conclusion": _conclusion(labels, hyp_list[0] if hyp_list else None, dominant_zone, yld["yield_pct"], suspect),
         "trace": trace,
     }

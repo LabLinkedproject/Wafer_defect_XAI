@@ -120,7 +120,19 @@ class WaferVerdict(unittest.TestCase):
         self.assertEqual(engine._wafer(["Random"], self.stats(3), None)["verdict"], "pass")   # Random 은 수율로만
         self.assertEqual(engine._wafer(["Random"], self.stats(5), None)["verdict"], "fail")
         self.assertEqual(engine._wafer([], self.stats(5), None, limit=0.2)["verdict"], "pass")
-        self.assertEqual(engine._wafer([], self.stats(1), None, long_scratch=3)["verdict"], "recheck")
+
+    def test_scratch_pattern_from_image(self):
+        # 11-17 실물: 웨이퍼를 가로지르는 스크래치 3개를 모델이 Local 로 읽었다. 전체 이미지 분석이 3 다이 이상
+        # 이어진 스크래치를 찾으면 Scratch 패턴을 근거와 함께 더한다
+        defects = scenarios.generate("donut", DIES)
+        plain = engine.analyze(DIES, WAFER_MODEL, defects)
+        seen = engine.analyze(DIES, WAFER_MODEL, defects, wafer_ctx={"long_scratch": 11})
+        self.assertNotIn("Scratch", plain["labels"])
+        self.assertEqual(seen["labels"][0], "Scratch")
+        self.assertIn("다이 11개", seen["image_patterns"]["Scratch"])
+        self.assertEqual(seen["wafer"]["verdict"], "fail")
+        self.assertIn("Scratch", seen["wafer"]["reason"])
+        self.assertTrue(next(p for p in seen["patterns"] if p["name"] == "Scratch")["is_label"])
 
     def test_yield_limit_from_history(self):
         from adc import scan_input
