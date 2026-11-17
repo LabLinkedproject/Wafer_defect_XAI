@@ -183,6 +183,15 @@ class Detect(unittest.TestCase):
         cv2.circle(g, (b * P + 85, a * P + 85), 5, 60, -1)                              # 같은 점이 가운데면 센다
         self.assertEqual([d["type"] for d in W.detect_array(g, meta, **front)["defects"]], ["particle"])
 
+    def test_shadow_beside_bright_grid_line_is_residual(self):
+        # 11-17 16:29 실물: 원점이 어긋나 밝은 격자선이 다이 안쪽에 들어오자 선 옆 그림자가 '스크래치'로 남았다
+        front = dict(dark_only=True, sharp_z=W.DARK_ONLY_Z, min_area_mm2=W.MIN_DARK_AREA_MM2)
+        a, b = R.die_slot(die_at(20))
+        g, meta = clean_map(line=25)
+        cv2.line(g, (b * P + 20, a * P + 15), (b * P + 20, a * P + P - 15), 230, 3)     # 다이 안의 밝은 격자선
+        cv2.line(g, (b * P + 24, a * P + 15), (b * P + 24, a * P + P - 15), 120, 2)     # 그 옆 그림자
+        self.assertEqual([d for d in W.detect_array(g, meta, **front)["defects"] if d["die"] == 20], [])
+
     def test_pieces_split_only_by_unseen_band_are_one(self):
         # 2026-11-16 실물: 카메라 반사 자리(검사 제외)가 스테인을 갈라 안쪽 조각이 따로 세어졌다
         mask = np.zeros((100, 100), bool)

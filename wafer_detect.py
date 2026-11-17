@@ -45,6 +45,9 @@ HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
 HEAVY_QUADRAT_COUNT = 3
 LINE_GUARD_MM = 5.0           # 다이 경계선에서 이 거리 안의 가는 성분은 격자선 잔차
 LINE_RESIDUAL_ELONGATION = 3.0
+LINE_SHADOW_MM = 1.5          # 밝은 격자선에서 이 거리 안에
+LINE_SHADOW_FRAC = 0.75       # 픽셀 이 비율 이상이 있는
+LINE_SHADOW_WIDTH_MM = 1.2    # 이 폭 이하의 가는 성분은 격자선 그림자 잔차
 CORNER_GUARD_MM = 4.0         # 다이 모서리(두 경계선 모두)에서 이 거리 안의 작은 점은 격자선 교차점 잔차
 CORNER_MAX_AREA_MM2 = 5.0     # 2026-11-16 17:41: 사진 이음매의 교차점 어긋남이 1~4.5 mm² 점 9개로 남았다
 EDGE_BAND_MM = 4.0            # 다이 가장자리 띠. 안쪽 24×24 mm 가 중심부 (docs/specs/die-verdict.md)
@@ -226,7 +229,7 @@ def _components(mask: np.ndarray, min_area: int, valid: np.ndarray | None = None
     return [(lab == i, areas[i]) for i in range(1, n) if areas[i] >= min_area]
 
 
-def _grid_residual(xs, ys, w, h, area_mm2, P, mm) -> bool:
+def _grid_residual(xs, ys, w, h, area_mm2, P, mm, line_dist=None) -> bool:
     """다이 경계선 옆 띠 안에 갇힌 길쭉한 성분과 모서리의 작은 점은 격자선 위치 차이가 남은 것으로 본다.
     격자선이 다이마다 조금씩 어긋나 있으면 기준 다이와 비교할 때 선이 결함처럼 남는다."""
     guard = LINE_GUARD_MM / mm
@@ -238,7 +241,12 @@ def _grid_residual(xs, ys, w, h, area_mm2, P, mm) -> bool:
     cg = CORNER_GUARD_MM / mm
     cx, cy = xs.mean(), ys.mean()
     corner = min(cx, P - 1 - cx) < cg and min(cy, P - 1 - cy) < cg and area_mm2 < CORNER_MAX_AREA_MM2
-    return corner or (near_x or near_y) and (along or area_mm2 < 1.0)
+    # 원점이 어긋나 격자선이 다이 안쪽에 들어오면 밝은 선 옆 그림자가 L 자 '스크래치'로 남는다 (11-17 16:29).
+    # 가는 성분이 거의 전부 밝은 격자선에 붙어 있으면 잔차. 실제 스크래치는 선과 건너는 곳에서만 닿는다
+    # (실물: 잔차 0.78~1.00, 경계 근처 실제 스크래치 조각 ≤ 0.54)
+    on_line = (line_dist is not None and area_mm2 / max(max(w, h) * mm, 1e-6) <= LINE_SHADOW_WIDTH_MM
+               and float(np.mean(line_dist[ys, xs] * mm <= LINE_SHADOW_MM)) >= LINE_SHADOW_FRAC)
+    return corner or on_line or (near_x or near_y) and (along or area_mm2 < 1.0)
 
 
 def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:
@@ -288,7 +296,10 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
                 (_, _), (w, h), _ = cv2.minAreaRect(pts)
                 long_mm, short = max(w, h) * mm, max(min(w, h), 1.0)
                 elong = max(w, h) / short
-                if not is_stain and _grid_residual(xs, ys, w, h, area * mm * mm, P, mm):
+                if "line_dist" not in c:                    # 밝은 격자선(다이 안 상위 2 %)까지 거리, 필요할 때 한 번
+                    bright = (c["img"] > np.percentile(c["img"], 98)).astype(np.uint8)
+                    c["line_dist"] = cv2.distanceTransform(1 - bright, cv2.DIST_L2, 5)
+                if not is_stain and _grid_residual(xs, ys, w, h, area * mm * mm, P, mm, c["line_dist"]):
                     continue
                 c["pixels"] |= comp
                 if is_stain:
