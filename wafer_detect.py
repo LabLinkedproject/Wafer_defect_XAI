@@ -45,6 +45,8 @@ HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
 HEAVY_QUADRAT_COUNT = 3
 LINE_GUARD_MM = 5.0           # 다이 경계선에서 이 거리 안의 가는 성분은 격자선 잔차
 LINE_RESIDUAL_ELONGATION = 3.0
+LINE_RESIDUAL_MAX_TILT = 6.0       # 경계 띠 안이라도 격자축에서 이 각도 이상 기울고
+LINE_RESIDUAL_MAX_WIDTH_MM = 1.2   # 이 굵기 이상이면 실제 스크래치 (격자선 잔차는 축과 나란하고 가늘다)
 LINE_SHADOW_MM = 1.5          # 밝은 격자선에서 이 거리 안에
 LINE_SHADOW_FRAC = 0.75       # 픽셀 이 비율 이상이 있는
 LINE_SHADOW_WIDTH_MM = 1.2    # 이 폭 이하의 가는 성분은 격자선 그림자 잔차
@@ -246,7 +248,14 @@ def _grid_residual(xs, ys, w, h, area_mm2, P, mm, line_dist=None) -> bool:
     # (실물: 잔차 0.78~1.00, 경계 근처 실제 스크래치 조각 ≤ 0.54)
     on_line = (line_dist is not None and area_mm2 / max(max(w, h) * mm, 1e-6) <= LINE_SHADOW_WIDTH_MM
                and float(np.mean(line_dist[ys, xs] * mm <= LINE_SHADOW_MM)) >= LINE_SHADOW_FRAC)
-    return corner or on_line or (near_x or near_y) and (along or area_mm2 < 1.0)
+    # 격자축에서 기울고 굵으면 경계 띠 안이라도 실제 스크래치다 (11-17 15:05 다이 25·27·39 를 잔차로 지웠다).
+    # 실물: 실제 스크래치 6.2~23.5°·1.4~2.8 mm, 잔차는 둘 중 하나가 모자란다
+    pts = np.column_stack([xs, ys]).astype(np.float64)
+    u = np.linalg.svd(pts - pts.mean(0), full_matrices=False)[2][0] if len(xs) > 2 else np.array([1.0, 0.0])
+    tilt = np.degrees(np.arctan2(abs(u[1]), abs(u[0])))
+    slanted = (min(tilt, 90 - tilt) >= LINE_RESIDUAL_MAX_TILT
+               and area_mm2 / max(max(w, h) * mm, 1e-6) >= LINE_RESIDUAL_MAX_WIDTH_MM)
+    return corner or on_line or (near_x or near_y) and (along or area_mm2 < 1.0) and not slanted
 
 
 def _kind(soft: bool, area_mm2: float, long_mm: float, elong: float) -> str:

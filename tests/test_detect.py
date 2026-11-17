@@ -192,6 +192,18 @@ class Detect(unittest.TestCase):
         cv2.line(g, (b * P + 24, a * P + 15), (b * P + 24, a * P + P - 15), 120, 2)     # 그 옆 그림자
         self.assertEqual([d for d in W.detect_array(g, meta, **front)["defects"] if d["die"] == 20], [])
 
+    def test_slanted_scratch_near_die_border_is_kept(self):
+        # 11-17 15:05 실물: 다이 경계와 나란히 5 mm 안쪽을 비스듬히 지나는 실제 스크래치(다이 25·27·39)를
+        # 격자선 잔차로 지웠다. 격자축에서 6° 이상 기울고 1.2 mm 이상 굵으면 잔차가 아니다
+        mm = 32 / P
+        ys = np.arange(20, 150).repeat(8)
+        xs = (15 + (ys - 20) * np.tan(np.radians(8))).astype(int) + np.tile(np.arange(8), 130)   # 8° 기울고 약 1.5 mm 굵기
+        (_, _), (w, h), _ = cv2.minAreaRect(np.column_stack([xs, ys]).astype(np.float32))
+        self.assertFalse(W._grid_residual(xs, ys, w, h, len(xs) * mm * mm, P, mm))
+        xs0 = np.full_like(ys, 15) + np.tile(np.arange(2), 520)[:len(ys)]                     # 축과 나란한 가는 선은 잔차
+        (_, _), (w0, h0), _ = cv2.minAreaRect(np.column_stack([xs0, ys]).astype(np.float32))
+        self.assertTrue(W._grid_residual(xs0, ys, w0, h0, len(np.unique(np.column_stack([xs0, ys]), axis=0)) * mm * mm, P, mm))
+
     def test_pieces_split_only_by_unseen_band_are_one(self):
         # 2026-11-16 실물: 카메라 반사 자리(검사 제외)가 스테인을 갈라 안쪽 조각이 따로 세어졌다
         mask = np.zeros((100, 100), bool)
