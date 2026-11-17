@@ -141,6 +141,20 @@ class Detect(unittest.TestCase):
         self.assertEqual(sorted(o["kind"] for o in out), ["particle", "scratch"])
         self.assertEqual(len(out[0]["xs"]) + len(out[1]["xs"]), 360)
 
+    def test_fragments_near_stain_are_absorbed(self):
+        # 11-17 도넛 스테인: 붓질로 쪼개진 고리 조각이 파티클·스크래치로 나왔다. 스테인 3 mm 안에 절반 이상 있는
+        # 조각은 같은 오염으로 흡수한다. 스테인 옆을 지나가기만 하는 긴 스크래치는 그대로 둔다
+        mm = 0.1
+        stain = {"kind": "stain", "fx": np.repeat(np.arange(100, 200), 50), "fy": np.tile(np.arange(100, 150), 100)}
+        frag = {"kind": "particle", "fx": np.arange(205, 215), "fy": np.full(10, 120)}
+        line = {"kind": "scratch", "fx": np.arange(0, 600), "fy": np.full(600, 160)}
+        far = {"kind": "particle", "fx": np.arange(400, 410), "fy": np.full(10, 400)}
+        for o in (stain, frag, line, far):
+            o["xs"], o["ys"], o["long_mm"] = o["fx"], o["fy"], 1.0
+        out = W._absorb_into_stains([stain, frag, line, far], mm, (500, 700))
+        self.assertEqual(sorted(o["kind"] for o in out), ["particle", "scratch", "stain"])
+        self.assertEqual(len(next(o for o in out if o["kind"] == "stain")["xs"]), 5000 + 10)
+
     def test_kind_rules(self):
         self.assertEqual(W._kind(False, 4.0, 2.5, 1.2), "particle")
         self.assertEqual(W._kind(False, 55.0, 11.0, 1.4), "stain")      # 길이로

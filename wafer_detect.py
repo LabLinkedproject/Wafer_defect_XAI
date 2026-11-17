@@ -39,6 +39,7 @@ SCRATCH_MIN_MM = 4.0
 SCRATCH_MAX_WIDTH_MM = 3.3    # 스크래치 평균 폭(면적/길이) 상한. 실물 스크래치 ≤ 3.17(교차), 도넛 스테인의 호 ≥ 3.7 mm (11-17)
 SCRATCH_SLENDER = 7.0         # 10 mm 넘는 결함은 길이²/면적(가는 정도)이 이 이상이면 스크래치. 실물 스테인 ≤ 5.3, 스크래치 ≥ 8.3
 SCRATCH_CORRIDOR_MM = 2.5     # 스크래치 연장선에서 이 거리 안의 작은 조각은 그 스크래치의 꼬리다
+STAIN_HALO_MM = 5.0           # 스테인에서 이 거리 안에 픽셀 절반 이상이 있는 조각은 같은 오염 (흐린 경계)
 SCRATCH_TAIL_MM = 8.0         # 스크래치 끝에서 이만큼 더 나간 곳까지 꼬리로 본다
 HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
 HEAVY_QUADRAT_COUNT = 3
@@ -336,6 +337,36 @@ def _absorb_tails(objs: list[dict], mm: float) -> list[dict]:
     return keep + out
 
 
+def _absorb_into_stains(objs: list[dict], mm: float, shape: tuple) -> list[dict]:
+    """스테인 가까이(STAIN_HALO_MM)에 픽셀 절반 이상이 있는 조각은 그 스테인의 일부로 흡수한다.
+    스테인은 경계가 흐리고 모양이 변칙적인 넓은 오염이라 붓질 사이가 끊겨 조각으로 잡힌다
+    (11-17 도넛 스테인: 고리 조각이 파티클 17·스크래치 7 로 나왔다)."""
+    stains = [o for o in objs if o["kind"] == "stain"]
+    if not stains:
+        return objs
+    lab = np.zeros(shape, np.int32)
+    for k, o in enumerate(stains, 1):
+        lab[o["fy"], o["fx"]] = k
+    dist, near = cv2.distanceTransformWithLabels((lab == 0).astype(np.uint8), cv2.DIST_L2, 5,
+                                                 labelType=cv2.DIST_LABEL_PIXEL)
+    # 거리 변환의 라벨은 가장 가까운 0 픽셀(=스테인 픽셀) 번호 → 그 픽셀의 스테인 번호로 바꾼다
+    ys, xs = np.nonzero(lab)
+    owner = np.zeros(near.max() + 1, np.int32)
+    owner[near[ys, xs]] = lab[ys, xs]
+    out = list(stains)
+    for o in objs:
+        if o["kind"] == "stain":
+            continue
+        close = dist[o["fy"], o["fx"]] * mm <= STAIN_HALO_MM
+        if close.mean() < 0.5:
+            out.append(o)
+            continue
+        host = stains[np.bincount(owner[near[o["fy"], o["fx"]][close]]).argmax() - 1]
+        for k in ("fx", "fy", "xs", "ys"):
+            host[k] = np.concatenate([host[k], o[k]])
+    return out
+
+
 def die_verdict(center_hit: bool, area_ratio: float, scratch_edge_mm: float = 0.0, stain_ratio: float = 0.0) -> str:
     """다이 판정 (docs/specs/inspection-criteria.md). 회로 영역(중심부)에 닿거나 결함이 많으면 불량,
     가장자리 띠에만 있으면 종류별 기준, 그 밖은 재검사(사람이 정한다)."""
@@ -446,6 +477,11 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
         ys, xs = np.nonzero(mine & defect[win])           # 다이 판정은 다이 비교 검출 픽셀로만
         objs.append({"kind": kind, "long_mm": long_mm, "fx": fx + x0, "fy": fy + y0, "xs": xs + x0, "ys": ys + y0})
     objs = _absorb_tails(objs, mm)
+    for _ in range(4):                 # 흡수한 조각이 스테인을 넓히므로 더 바뀌지 않을 때까지 되풀이
+        n = len(objs)
+        objs = _absorb_into_stains(objs, mm, shape)
+        if len(objs) == n:
+            break
 
     # 2차: 다이 단위 판정
     band = int(round(EDGE_BAND_MM / mm))
