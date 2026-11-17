@@ -127,8 +127,9 @@ class Session:
                     for f in self.detection["defects"]:
                         if f["type"] == "scratch":
                             spans.setdefault(f["obj"], set()).add(f["die"])
-                    ctx = {"limit": scan_input.yield_limit(scan_input.defect_ratio_history(self.scan_id)),
-                           "long_scratch": max((len(v) for v in spans.values()), default=0)}
+                    # shortcut: 수율 한계는 10 % 고정. 이력이 결함을 일부러 넣은 시험 웨이퍼뿐이라 평균+3σ 가 100 % 가 되어
+                    # 불량 판정이 사라졌다(11-17). 생산 웨이퍼 이력이 6 장 이상 쌓이면 AEC-Q002 SYL(평균+3σ)로 바꾼다
+                    ctx = {"long_scratch": max((len(v) for v in spans.values()), default=0)}
                 r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model, verdicts or None, ctx)
                 sess = {"source": self.source, "scenario": self.scenario, "edited": self.edited,
                         "scenario_name": scenarios.SCENARIOS[self.scenario]["name"],

@@ -133,33 +133,6 @@ def die_defects(det: dict) -> dict[int, dict]:
     return out
 
 
-HISTORY_MIN = 6                  # AEC-Q002: 통계 수율 한계는 최소 6 로트 이력. 그 전에는 고정 기준
-
-
-def yield_limit(history: list[float], fixed: float = 0.10) -> float:
-    """웨이퍼 불량 다이 비율의 한계. 이력이 6 장 미만이면 고정값, 이상이면 평균 + 3σ (SYL1 현지화)."""
-    if len(history) < HISTORY_MIN:
-        return fixed
-    return min(1.0, float(np.mean(history) + 3 * np.std(history)))
-
-
-def defect_ratio_history(exclude: str | None = None) -> list[float]:
-    """검출 결과가 저장된 다른 스캔들의 불량 다이 비율."""
-    out = []
-    for s in scans():
-        if s["id"] == exclude:
-            continue
-        try:
-            with open(os.path.join(scan_dir(s["id"]), CACHE)) as f:
-                det = json.load(f)
-        except (OSError, ValueError):
-            continue
-        v = [x["verdict"] for x in det.get("verdicts", {}).values()]
-        if v:
-            out.append(sum(1 for x in v if x == "defect") / len(v))
-    return out
-
-
 def die_verdicts(det: dict) -> dict[int, str]:
     """{다이 id: normal|defect|recheck}"""
     return {int(k): v["verdict"] for k, v in det.get("verdicts", {}).items()}

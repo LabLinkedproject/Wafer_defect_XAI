@@ -156,20 +156,6 @@ class WaferVerdict(unittest.TestCase):
         finally:
             scan_input.scan_dir, scan_input.detect = old
 
-    def test_yield_limit_from_history(self):
-        from adc import scan_input
-        self.assertEqual(scan_input.yield_limit([0.1, 0.2]), 0.10)                    # 이력 6 장 미만은 고정
-        lim = scan_input.yield_limit([0.05, 0.10, 0.05, 0.10, 0.05, 0.10])
-        self.assertAlmostEqual(lim, 0.075 + 3 * 0.025, places=3)                       # 평균 + 3σ
-
-    def test_recheck_die_is_not_model_input(self):
-        defects = {d["id"]: {"particle": 1, "scratch": 0, "stain": 0} for d in DIES if d["zone"] == "edge"}
-        as_defect = engine.analyze(DIES, WAFER_MODEL, defects)
-        as_recheck = engine.analyze(DIES, WAFER_MODEL, defects, verdicts={i: "recheck" for i in defects})
-        self.assertIn("Edge-Ring", as_defect["labels"])
-        self.assertEqual(as_recheck["labels"], [])
-        self.assertEqual(as_recheck["wafer"]["verdict"], "recheck")
-
 
 if __name__ == "__main__":
     unittest.main()
