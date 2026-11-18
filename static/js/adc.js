@@ -540,8 +540,14 @@
       S = await api("/api/adc/state");
       const want = new URLSearchParams(location.search).get("scan");
       const latest = S.scans[0]?.id;
-      if (want && want !== S.session.scan_id) S = await api("/api/adc/scan", { id: want });
-      else if (!want && latest && (S.session.source !== "scan" || latest !== S.session.scan_id)) S = await api("/api/adc/scan", { id: latest });
+      // 고른 스캔이 분석에 실패해도(예: 격자 인식 실패) 화면과 드롭다운은 그려야 이전 기록을 고를 수 있다
+      const open = (id) => api("/api/adc/scan", { id }).catch((e) => {
+        $("errbar").textContent = `${id} 분석 실패: ${e.message}`;
+        $("errbar").hidden = false;
+        return S;
+      });
+      if (want && want !== S.session.scan_id) S = await open(want);
+      else if (!want && latest && (S.session.source !== "scan" || latest !== S.session.scan_id)) S = await open(latest);
       render();
     } catch (e) {
       $("errbar").textContent = `상태를 불러오지 못했습니다: ${e.message}`;
