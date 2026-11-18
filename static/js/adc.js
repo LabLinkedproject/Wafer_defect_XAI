@@ -88,13 +88,14 @@
     $("verdict-title").textContent = `웨이퍼 ${w.ko}`;
     $("verdict-title").className = `wv-${w.verdict}`;
     $("verdict-sub").textContent = w.reason;
-    const byImage = S.image_patterns?.[top];          // 모델이 아니라 전체 이미지 분석이 낸 패턴
-    const tags = [top ? `<span class="tag">패턴 ${esc(top)} · ${esc(pat.ko)}${byImage ? " · 전체 이미지 근거" : ""}</span>` : sp ? `<span class="tag warn">${esc(sp.name)} 의심 ${sp.score.toFixed(2)}</span>` : '<span class="tag">패턴 없음</span>'];
+    // 결함 배치 근거(adc/geometry.py)만으로 붙은 패턴이면 모델 점수 대신 근거를 보인다
+    const byImage = pat && pat.score < pat.threshold ? S.image_patterns?.[top] : null;
+    const tags = [top ? `<span class="tag">패턴 ${esc(top)} · ${esc(pat.ko)}${S.image_patterns?.[top] ? " · 배치 근거" : ""}</span>` : sp ? `<span class="tag warn">${esc(sp.name)} 의심 ${sp.score.toFixed(2)}</span>` : '<span class="tag">패턴 없음</span>'];
     tags.push(...S.labels.slice(1).map((l) => `<span class="tag">복합 ${esc(l)}</span>`));
     if (S.ambiguous) tags.push('<span class="tag warn">판정 여유 낮음 · 엔지니어 검토 권장</span>');
     $("verdict-labels").innerHTML = tags.join("");
 
-    $("k-score").textContent = byImage ? "이미지" : top ? S.top_score.toFixed(2) : sp ? sp.score.toFixed(2) : "-";
+    $("k-score").textContent = byImage ? "배치 근거" : top ? S.top_score.toFixed(2) : sp ? sp.score.toFixed(2) : "-";
     $("k-margin").textContent = byImage ? byImage : top ? `2순위와 차이 ${S.margin.toFixed(2)}` : "";
     const y = S.yield;
     $("k-yield").textContent = `${y.yield_pct}%`;
@@ -255,7 +256,7 @@
     const rows = [...S.patterns].sort((a, b) => b.score - a.score);
     box.innerHTML = rows.map((p) => `
       <button type="button" class="bar-row${S.xai.target === p.name ? " sel" : ""}" data-t="${esc(p.name)}" title="${esc(p.desc)}">
-        <span class="name">${esc(p.name)}${p.by_image ? " <small>이미지</small>" : ""}</span>
+        <span class="name">${esc(p.name)}${p.by_image ? " <small>배치</small>" : ""}${p.rejected ? ` <small title="${esc(p.rejected)}">기각</small>` : ""}</span>
         <span class="bar-track"><span class="bar-fill${p.is_label ? " on" : ""}" style="width:${p.score * 100}%"></span><span class="bar-mark" style="left:${p.threshold * 100}%"></span></span>
         <span class="bar-val">${p.score.toFixed(2)}</span>
       </button>`).join("");

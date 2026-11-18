@@ -102,10 +102,15 @@ def _build_trace(ctx: dict) -> list[dict]:
     t = [{"kind": "observe", "title": "관찰",
           "text": f"다이 {ctx['active']}개 중 {ctx['defect_dies']}개에서 결함 {ctx['total']}건을 확인했습니다."}]
     if not ctx["labels"]:
-        sp = ctx.get("suspect")
+        sp, wide = ctx.get("suspect"), ctx.get("wide")
+        if wide:                                         # 자기 점검: 검출이 비어도 다이 밝기가 크게 흔들리면 사람에게
+            t.append({"kind": "explain", "title": "자기 점검",
+                      "text": f"검출 결함은 적지만 다이 밝기 변동이 {wide['cv']:.2f}로 커서, 넓은 오염이 기준 다이까지 덮었을 수 "
+                              f"있습니다 (어두운 다이 {len(wide.get('dark_dies', []))}개)."})
         t.append({"kind": "conclude", "title": "결론", "text":
                   f"판정선을 넘는 패턴은 없습니다. {sp['name']} 점수 {sp['score']:.2f}(판정선 {sp['threshold']:.2f})라 검토 대상으로 표시합니다."
-                  if sp else "판정선을 넘는 패턴이 없어 정상으로 판단합니다."})
+                  if sp else "판정선을 넘는 패턴은 없지만 넓은 오염이 의심돼 재검사로 넘깁니다." if wide
+                  else "판정선을 넘는 패턴이 없어 정상으로 판단합니다."})
         return t
     for name, why in ctx.get("rejected", {}).items():
         t.append({"kind": "explain", "title": "근거 검토", "text": f"모델의 {name} 판정은 뺐습니다: {why}."})
@@ -262,6 +267,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
         "image_top_name": _HYP[image_top]["name"] if image_top else None,
         "image_top_p": image_belief[image_top] if image_top else 0, "suspect": suspect,
         "image_patterns": image_patterns, "rejected": rejected,
+        "wide": (ctx.get("uniformity") or {}) if (ctx.get("uniformity") or {}).get("wide_stain") else None,
     })
 
     detections, stain = render.detect_regions(dies, defects, spec["pitch_mm"], spec["diameter_mm"])
@@ -291,6 +297,8 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
         "risk": risk, "yield": yld, "projected": projected, "recipe": recipe,
         "stain": stain, "detections": detections, "image_size": render.IMAGE_SIZE,
         "suspect": suspect, "wafer": _wafer(labels, stats, suspect, **ctx),
-        "conclusion": _conclusion(labels, hyp_list[0] if hyp_list else None, dominant_zone, yld["yield_pct"], suspect),
+        "conclusion": ("뚜렷한 패턴은 없지만 다이 밝기가 크게 흔들려 넓은 오염이 의심됩니다. 육안 확인이 필요합니다."
+                       if not labels and not suspect and (ctx.get("uniformity") or {}).get("wide_stain")
+                       else _conclusion(labels, hyp_list[0] if hyp_list else None, dominant_zone, yld["yield_pct"], suspect)),
         "trace": trace,
     }
