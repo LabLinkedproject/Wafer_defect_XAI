@@ -22,8 +22,11 @@ import wafer_raster as R
 from wafer_model import WAFER_MODEL, die_layout
 
 SCRIBE_MARGIN = 12            # 스크라이브 라인은 정렬 오차에 민감해 다이 가장자리는 비교에서 뺀다
-MIN_DIE_COVERAGE = 0.85       # 다이들의 보통 촬영 비율 대비 이보다 적게 찍힌 다이는 검사하지 않는다 (가장자리 다이는 이웃 사진이 덮는 몫이 없어 0.87 배 안팎)
-MIN_DIE_COVERAGE_ABS = 0.5    # 그래도 다이 면적의 절반도 안 찍힌 다이는 뺀다
+MIN_DIE_COVERAGE_ABS = 0.5    # 다이 면적의 절반 이상 찍힌 다이는 보이는 부분만이라도 검사한다. 예전에는 다이들의 보통
+                              # 촬영 비율의 85 % 도 빼서, 겹침 몫이 없는 둘레 다이 30·42 가 15 장 중 7 장에서 검사 밖이었다(11-18)
+WIDE_STAIN_CV = 0.25          # 다이 밝기(안쪽 중앙값) 변동계수가 이 이상이면 넓은 오염 의심. 실측: 전면 스테인 0.29·0.56,
+                              # 그 밖 22 장 ≤ 0.22 (11-18). 다이끼리 비교하는 검출은 대부분 다이가 같이 더러우면 못 본다
+DARK_DIE_RATIO = 0.7          # 밝은 쪽(상위 25 %) 다이 밝기의 이 배보다 어두운 다이를 '어두운 다이'로 알린다
 MAX_SHIFT = 8                 # 미세 정렬 허용 폭 (px)
 GOLDEN_MAX_SHIFT_MM = 4.0     # 기준 웨이퍼 같은 다이에 맞출 때 허용 폭 (웨이퍼를 다시 놓은 어긋남)
 SHARP_Z = 7.0                 # 선명한 결함 판정선
@@ -41,6 +44,11 @@ SCRATCH_SLENDER = 7.0         # 10 mm 넘는 결함은 길이²/면적(가는 �
 SCRATCH_CORRIDOR_MM = 2.5     # 스크래치 연장선에서 이 거리 안의 작은 조각은 그 스크래치의 꼬리다
 STAIN_HALO_MM = 5.0           # 스테인에서 이 거리 안에 픽셀 절반 이상이 있는 조각은 같은 오염 (흐린 경계)
 SCRATCH_TAIL_MM = 8.0         # 스크래치 끝에서 이만큼 더 나간 곳까지 꼬리로 본다
+LINE_SEG_MIN_MM = 20.0        # 붙은 스크래치 가르기: 이 길이 이상 곧은 선분만
+LINE_BAND_MM = 2.0            # 선분에서 이 거리 안의 픽셀을 그 선분 몫으로 본다. 띠 폭 4 mm: 굵은 붓질(6 mm)은 띠를 꽉 채워 3.3 mm 를 넘는다
+LINE_COVER = 0.8              # 픽셀의 이 비율 이상을 가는 선분 몇 개(최대 LINE_MAX_SEGS)가 설명하면 스크래치 묶음
+LINE_GROUP_MAX_WIDTH_MM = 4.5 # 묶음 전체의 평균 폭 상한. 실물 스크래치 묶음 3.3~4.4, 가는 결이 여러 줄인 스테인 띠 6.2 (11-18 14:29)
+LINE_MAX_SEGS = 8             # 넓은 스크래치는 양쪽 가장자리만 두 줄로 잡혀 선분이 많이 든다 (11-17 15:05: 6 개)
 HEAVY_QUADRAT_AREA = 0.05     # 구역 면적 중 이 비율 이상이면 heavy
 HEAVY_QUADRAT_COUNT = 3
 LINE_GUARD_MM = 5.0           # 다이 경계선에서 이 거리 안의 가는 성분은 격자선 잔차
@@ -124,8 +132,7 @@ def crop_dies(img, valid, P, dies):
     for d in dies:
         r, c = R.die_slot(d)
         cover[d["id"]] = float(valid[r * P:(r + 1) * P, c * P:(c + 1) * P].mean())
-    seen = [v for v in cover.values() if v >= MIN_DIE_COVERAGE_ABS]
-    need = max(MIN_DIE_COVERAGE_ABS, MIN_DIE_COVERAGE * float(np.median(seen))) if seen else 1.0
+    need = MIN_DIE_COVERAGE_ABS
     for d in dies:
         r, c = R.die_slot(d)
         y, x = r * P, c * P
@@ -182,6 +189,18 @@ def align(crops: dict, P: int, golden: dict | None = None):
         c["img"] = cv2.warpAffine(c["img"], M, (P, P), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         c["valid"] = cv2.warpAffine(c["valid"].astype(np.uint8), M, (P, P), flags=cv2.INTER_NEAREST) > 0
         c["shift"] = (round(dx, 2), round(dy, 2))
+
+
+def die_uniformity(crops: dict) -> dict:
+    """다이 밝기가 고른지 스스로 점검한다. 검출은 같은 웨이퍼 다이끼리 비교하므로, 대부분 다이가 같은 오염을 덮어쓰면
+    기준(중앙값)도 더러워져 결함을 못 본다(11-18 15:36 전면 스테인 → 결함 0 개, 양품). 그때도 다이 밝기는 크게 흔들린다.
+    반환: cv(변동계수), wide_stain(의심 여부), dark_dies(어두운 다이)"""
+    med = {i: float(np.median(c["img"][c["valid"]])) for i, c in crops.items() if c["valid"].any()}
+    v = np.array(list(med.values()))
+    cv = float(v.std() / max(v.mean(), 1e-6))
+    top = float(np.percentile(v, 75))
+    return {"cv": round(cv, 3), "wide_stain": cv >= WIDE_STAIN_CV,
+            "dark_dies": sorted(i for i, m in med.items() if m < DARK_DIE_RATIO * top)}
 
 
 def robust_sigma(a: np.ndarray) -> float:
@@ -318,6 +337,35 @@ def extract(crops: dict, P: int, noise: dict, min_area_mm2: float = 0.0, sharp_z
 def _within(mask: np.ndarray, r: float) -> np.ndarray:
     """mask 에서 거리 r px 안. 큰 원형 팽창(지름 325 px)은 전체 이미지에서 너무 무거워 거리 변환으로 잰다."""
     return cv2.distanceTransform((~mask).astype(np.uint8), cv2.DIST_L2, 5) <= r
+
+
+def _line_made(fx: np.ndarray, fy: np.ndarray, mm: float) -> bool:
+    """결함이 가는 곧은 선분 몇 개로 이루어졌는지. 교차하거나 붙은 스크래치는 합치면 평균 폭이 넓어 스테인이 됐다
+    (11-17 15:05 엇갈린 두 스크래치, 16:51 스크래치 군집). 선분마다 곧고(LINE_SEG_MIN_MM 이상) 가늘어야 하므로
+    휘어진 굵은 붓질(도넛 스테인)이나 덩어리는 해당하지 않는다."""
+    if len(fx) < 50:
+        return False
+    x0, y0 = int(fx.min()), int(fy.min())
+    m = np.zeros((int(fy.max()) - y0 + 1, int(fx.max()) - x0 + 1), np.uint8)
+    m[fy - y0, fx - x0] = 255
+    left, total, band = m.copy(), int(len(fx)), max(LINE_BAND_MM / mm, 1.0)
+    seg_min = LINE_SEG_MIN_MM / mm
+    for _ in range(LINE_MAX_SEGS):
+        lines = cv2.HoughLinesP(left, 1, np.pi / 360, threshold=int(seg_min * 0.6), minLineLength=int(seg_min),
+                                maxLineGap=int(round(3.0 / mm)))
+        if lines is None:
+            break
+        x1, y1, x2, y2 = max(lines[:, 0], key=lambda l: math.hypot(l[2] - l[0], l[3] - l[1]))
+        on = np.zeros_like(left)
+        cv2.line(on, (int(x1), int(y1)), (int(x2), int(y2)), 255, int(round(2 * band)) + 1)
+        hit = (left > 0) & (on > 0)
+        length_mm = math.hypot(x2 - x1, y2 - y1) * mm
+        if hit.sum() * mm * mm / max(length_mm, 1e-6) > SCRATCH_MAX_WIDTH_MM:
+            return False                                 # 선분 띠에 모인 픽셀이 너무 굵다 → 선이 아니다
+        left[hit] = 0
+        if 1 - (left > 0).sum() / total >= LINE_COVER:
+            return True
+    return False
 
 
 def _absorb_tails(objs: list[dict], mm: float) -> list[dict]:
@@ -493,7 +541,12 @@ def link_defects(crops: dict, P: int, img: np.ndarray, follow_dark: bool = True,
         long_mm = max(w, h) * mm
         # 번짐 채널 픽셀이 대부분일 때만 번짐 결함이다. 파티클 둘레 번짐이 이어 붙으면 파티클이 스테인이 됐다(21:15)
         n_soft = int((soft[win] & mine).sum())
-        kind = _kind(n_soft * 2 > int(mine.sum()), len(fx) * mm * mm, long_mm, max(w, h) / max(min(w, h), 1.0))
+        soft_dom = n_soft * 2 > int(mine.sum())
+        kind = _kind(soft_dom, len(fx) * mm * mm, long_mm, max(w, h) / max(min(w, h), 1.0))
+        # 번짐이 대부분인 띠(스테인)는 가장자리만 곧게 잡혀도 스크래치가 아니다 (11-18 14:29 둘레 스테인 띠)
+        if (kind == "stain" and not soft_dom and long_mm > STAIN_MIN_LENGTH_MM
+                and len(fx) * mm * mm / long_mm <= LINE_GROUP_MAX_WIDTH_MM and _line_made(fx, fy, mm)):
+            kind = "scratch"
         ys, xs = np.nonzero(mine & defect[win])           # 다이 판정은 다이 비교 검출 픽셀로만
         objs.append({"kind": kind, "long_mm": long_mm, "fx": fx + x0, "fy": fy + y0, "xs": xs + x0, "ys": ys + y0})
     objs = _absorb_tails(objs, mm)
@@ -607,11 +660,12 @@ def detect_rectified(img: np.ndarray, valid: np.ndarray, P: int, per_die: int = 
     crops = crop_dies(img, valid, P, dies)
     if len(crops) < 8:
         raise ValueError(f"검사 가능한 다이가 {len(crops)}개뿐입니다. 기준 다이를 만들려면 8개 이상 필요합니다.")
+    uniformity = die_uniformity(crops)
     align(crops, P, golden)
     noise = analyse(crops, P, golden)
     extract(crops, P, noise, min_area_mm2, sharp_z, dark_only)
     found, verdicts = link_defects(crops, P, img, follow_dark=dark_only, ref=noise["reference"])
-    return {"inspected": sorted(crops), "defects": found, "verdicts": verdicts, "pitch_px": P,
+    return {"inspected": sorted(crops), "defects": found, "verdicts": verdicts, "pitch_px": P, "uniformity": uniformity,
             "noise": {k: round(v, 5) for k, v in noise.items() if k != "reference"},
             "shift_px": round(float(np.max([np.hypot(*c["shift"]) for c in crops.values()])), 2),
             "quadrats": quadrat_values(crops, found, P, per_die)}

@@ -58,7 +58,7 @@ def _yield(die_stats: dict) -> dict:
             "defect_die": die_stats["defect"], "active_die": die_stats["active"]}
 
 
-def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO) -> dict:
+def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO, uniformity: dict | None = None) -> dict:
     """웨이퍼 판정 (docs/specs/inspection-criteria.md 4절).
     Random 외 패턴 → 불량(공정 원인 보류), 불량 다이 비율 ≥ 수율 한계 → 불량,
     재검사 다이·긴 스크래치·의심 → 재검사(사람 판단), 그 밖 양품. Random 은 수율 기준으로만 본다."""
@@ -72,6 +72,10 @@ def _wafer(labels: list, stats: dict, suspect, limit: float = WAFER_DEFECT_RATIO
         v, why = "recheck", f"재검사 다이 {stats['recheck']}개 — 육안 판정 필요"
     elif suspect:
         v, why = "recheck", f"{suspect['name']} 의심 (점수 {suspect['score']:.2f}) — 육안 판정 필요"
+    elif uniformity and uniformity.get("wide_stain"):
+        # 자기 점검: 결함을 거의 못 찾았는데 다이 밝기가 크게 흔들리면 넓은 오염이 기준 다이까지 덮었을 수 있다
+        v, why = "recheck", (f"다이 밝기가 고르지 않아(변동 {uniformity['cv']:.2f}) 넓은 오염 의심, 어두운 다이 "
+                             f"{len(uniformity.get('dark_dies', []))}개 — 다이 비교 검출이 놓칠 수 있어 육안 판정 필요")
     else:
         v, why = "pass", ("Random 분포, 수율 한계 이내" if labels else "패턴·불량 다이 기준 미달")
     return {"verdict": v, "ko": WAFER_KO[v], "reason": why}

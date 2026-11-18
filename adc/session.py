@@ -126,7 +126,8 @@ class Session:
                     # 패턴 근거 검토(adc/geometry.py)에 검출 위치를 넘긴다.
                     # shortcut: 수율 한계는 10 % 고정. 이력이 결함을 일부러 넣은 시험 웨이퍼뿐이라 평균+3σ 가 100 % 가 되어
                     # 불량 판정이 사라졌다(11-17). 생산 웨이퍼 이력이 6 장 이상 쌓이면 AEC-Q002 SYL(평균+3σ)로 바꾼다
-                    ctx = {"defects": self.detection["defects"], "inspected": self.detection["inspected"]}
+                    ctx = {"defects": self.detection["defects"], "inspected": self.detection["inspected"],
+                           "uniformity": self.detection.get("uniformity")}
                 r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model, verdicts or None, ctx)
                 sess = {"source": self.source, "scenario": self.scenario, "edited": self.edited,
                         "scenario_name": scenarios.SCENARIOS[self.scenario]["name"],

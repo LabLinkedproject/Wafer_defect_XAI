@@ -228,6 +228,48 @@ class Detect(unittest.TestCase):
             W.detect_array(np.zeros_like(g), meta)
 
 
+class LineMade(unittest.TestCase):
+    """붙거나 엇갈린 스크래치 묶음은 스크래치, 굵은 붓질·덩어리는 아니다 (mm = 0.1 mm/px)"""
+    mm = 0.1
+
+    def pts(self, m):
+        ys, xs = np.nonzero(m)
+        return xs, ys
+
+    def test_crossing_scratches(self):
+        m = np.zeros((600, 600), np.uint8)
+        cv2.line(m, (50, 50), (550, 500), 255, 15)          # 폭 1.5 mm, 길이 67 mm
+        cv2.line(m, (80, 520), (520, 60), 255, 15)
+        self.assertTrue(W._line_made(*self.pts(m), self.mm))
+
+    def test_blob_and_thick_arc_are_not_lines(self):
+        m = np.zeros((600, 600), np.uint8)
+        cv2.circle(m, (300, 300), 120, 255, -1)              # 지름 24 mm 덩어리
+        self.assertFalse(W._line_made(*self.pts(m), self.mm))
+        a = np.zeros((900, 900), np.uint8)
+        cv2.ellipse(a, (450, 450), (350, 350), 0, 0, 300, 255, 60)   # 반지름 35 mm 고리, 붓 폭 6 mm
+        self.assertFalse(W._line_made(*self.pts(a), self.mm))
+        st = np.zeros((600, 900), np.uint8)
+        cv2.line(st, (50, 300), (850, 320), 255, 60)                 # 곧지만 폭 6 mm 붓질
+        self.assertFalse(W._line_made(*self.pts(st), self.mm))
+
+
+class Uniformity(unittest.TestCase):
+    def crops(self, levels):
+        P = 40
+        return {i + 1: {"img": np.full((P, P), v, np.float32), "valid": np.ones((P, P), bool)} for i, v in enumerate(levels)}
+
+    def test_even_dies(self):
+        u = W.die_uniformity(self.crops([200, 205, 195, 210, 190, 200, 202, 198]))
+        self.assertFalse(u["wide_stain"])
+        self.assertEqual(u["dark_dies"], [])
+
+    def test_stained_dies_are_flagged(self):
+        u = W.die_uniformity(self.crops([200, 205, 80, 90, 70, 85, 95, 200]))
+        self.assertTrue(u["wide_stain"])
+        self.assertEqual(u["dark_dies"], [3, 4, 5, 6, 7])
+
+
 class Quadrats(unittest.TestCase):
     def test_matches_die_value_layout(self):
         dies = die_layout()

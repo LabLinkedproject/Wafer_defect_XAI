@@ -115,6 +115,15 @@ class WaferVerdict(unittest.TestCase):
         self.assertEqual(engine._wafer([], self.stats(3), {"name": "Scratch", "score": 0.6})["verdict"], "recheck")
         self.assertEqual(engine._wafer([], self.stats(3), None)["verdict"], "pass")
 
+    def test_wide_stain_self_check(self):
+        # 11-18 15:36: 전면 스테인이 기준 다이까지 덮어 결함 0 개 → 양품. 다이 밝기가 크게 흔들리면 재검사로 올린다
+        wide = {"cv": 0.56, "wide_stain": True, "dark_dies": [3, 4, 5]}
+        w = engine._wafer([], self.stats(0), None, uniformity=wide)
+        self.assertEqual(w["verdict"], "recheck")
+        self.assertIn("넓은 오염", w["reason"])
+        self.assertEqual(engine._wafer([], self.stats(0), None, uniformity={"cv": 0.1, "wide_stain": False})["verdict"], "pass")
+        self.assertEqual(engine._wafer(["Donut"], self.stats(2), None, uniformity=wide)["verdict"], "fail")   # 불량이 우선
+
     def test_inspection_criteria(self):
         # docs/specs/inspection-criteria.md 4절
         self.assertEqual(engine._wafer(["Random"], self.stats(3), None)["verdict"], "pass")   # Random 은 수율로만
