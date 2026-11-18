@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from wafer_model import active_radius
 from . import belief as B
+from . import geometry as GEO
 from . import render, scoring as S
 from .knowledge import (CHECKS, DEFECT_TYPES, HYPOTHESES, LABEL_THRESHOLD, PATTERNS, RECIPE_PARAMS,
                         SEVERITY_ADVICE)
@@ -33,7 +34,6 @@ _CHECK = {c["id"]: c for c in CHECKS}
 
 WAFER_DEFECT_RATIO = 0.10     # 불량 다이가 검사 다이의 이 비율 이상이면 웨이퍼 불량 (docs/specs/die-verdict.md)
 WAFER_KO = {"pass": "양품", "fail": "불량", "recheck": "재검사"}
-LONG_SCRATCH_DIES = 3          # 전체 이미지에서 이 수 이상 다이를 잇는 스크래치는 Scratch 패턴
 
 
 def _risk(die_stats: dict, top: str | None) -> dict:
@@ -103,6 +103,10 @@ def _build_trace(ctx: dict) -> list[dict]:
                   f"판정선을 넘는 패턴은 없습니다. {sp['name']} 점수 {sp['score']:.2f}(판정선 {sp['threshold']:.2f})라 검토 대상으로 표시합니다."
                   if sp else "판정선을 넘는 패턴이 없어 정상으로 판단합니다."})
         return t
+    for name, why in ctx.get("rejected", {}).items():
+        t.append({"kind": "explain", "title": "근거 검토", "text": f"모델의 {name} 판정은 뺐습니다: {why}."})
+    for name, why in ctx.get("image_patterns", {}).items():
+        t.append({"kind": "explain", "title": "배치 근거", "text": f"{name}: {why}."})
     t.append({"kind": "classify", "title": "분류",
               "text": f"{' + '.join(ctx['labels'])} 판정. 1순위 점수 {ctx['top_score']:.2f}, 2순위와 차이 {ctx['margin']:.2f}."})
     c = ctx["contrib"]
@@ -147,14 +151,15 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
     model = model or S.RuleModel(dies, {i: c for i, c in defects.items() if verdicts.get(i) == "defect"})
     scores = model.scores()
     labels = S.labels_from(scores, model)
-    # 전체 이미지 분석의 패턴 근거: 3 다이 이상 이어진 스크래치는 Scratch 패턴이다. 모델(WM-811K 학습)은 웨이퍼를
-    # 가로지르는 긴 스크래치를 Local 로 읽었다 (11-17 실물). 모델 점수는 바꾸지 않고 근거와 함께 라벨만 더한다
+    # 패턴 근거 검토 (adc/geometry.py): 모델 판정을 검출된 결함의 실제 배치로 다시 따진다. 모델 점수는 그대로 두고
+    # 근거가 있는 패턴은 더하고, 근거와 맞지 않는 라벨은 이유와 함께 뺀다 (11-18 실측: 둘레 입자 고리를 Scratch 로 읽음)
     ctx = dict(wafer_ctx or {})
-    n_long = ctx.pop("long_scratch", 0)
-    image_patterns = {}
-    if n_long >= LONG_SCRATCH_DIES:
-        image_patterns["Scratch"] = f"전체 이미지 분석: 다이 {n_long}개를 잇는 스크래치"
-        labels = ["Scratch"] + [l for l in labels if l != "Scratch"]
+    image_patterns, rejected = {}, {}
+    if "defects" in ctx:
+        bad = {i for i, v in verdicts.items() if v == "defect"}
+        geo = GEO.evidence(ctx.pop("defects"), bad, set(ctx.pop("inspected", [])), dies, labels)
+        image_patterns, rejected = geo["add"], geo["drop"]
+        labels = GEO.reconcile(labels, geo)
     ordered = sorted(PATTERNS, key=lambda c: scores[c]["score"], reverse=True)
     top = labels[0] if labels else None
     second = scores[ordered[1]]["score"]
@@ -203,7 +208,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
     hyp_list, checks, history, converged, h_now = [], [], [], False, None
     image_belief = None
     if labels:
-        evidence = {c: (1.0 if c in image_patterns else scores[c]["score"]) for c in PATTERNS}
+        evidence = {c: (1.0 if c in image_patterns else 0.0 if c in rejected else scores[c]["score"]) for c in PATTERNS}
         image_belief = B.prior_from_evidence(evidence, shares)
         cur = dict(image_belief)
         asked = set()
@@ -252,6 +257,7 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
         "hyp": hyp_list, "history": history, "converged": converged, "checks": checks,
         "image_top_name": _HYP[image_top]["name"] if image_top else None,
         "image_top_p": image_belief[image_top] if image_top else 0, "suspect": suspect,
+        "image_patterns": image_patterns, "rejected": rejected,
     })
 
     detections, stain = render.detect_regions(dies, defects, spec["pitch_mm"], spec["diameter_mm"])
@@ -268,9 +274,10 @@ def analyze(dies, spec, defects, answers=None, target=None, model=None, verdicts
         "dominant_zone": dominant_zone, "dominant_type": dominant_type,
         "threshold": LABEL_THRESHOLD,
         "patterns": [{"name": c, **PATTERNS[c], "score": scores[c]["score"], "channel": scores[c]["channel"],
-                      "threshold": model.threshold(c), "is_label": c in labels, "by_image": image_patterns.get(c)}
+                      "threshold": model.threshold(c), "is_label": c in labels, "by_image": image_patterns.get(c),
+                      "rejected": rejected.get(c)}
                      for c in PATTERNS],
-        "image_patterns": image_patterns,
+        "image_patterns": image_patterns, "rejected_patterns": rejected,
         "labels": labels, "top": top, "top_score": top_score, "margin": margin, "ambiguous": bool(labels) and margin < 0.2,
         "xai": {"target": tgt, "score": scores[tgt]["score"], "logit": scores[tgt]["logit"], "bias": scores[tgt]["bias"],
                 "channel": scores[tgt]["channel"], "contributions": scores[tgt]["contributions"],

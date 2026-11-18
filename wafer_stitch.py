@@ -184,7 +184,8 @@ def camera_prior(scan_root: str, exclude: str, recent: int = 5, scale_hint: floa
     scales, turns, mirrored = [], [], []
     for d in sorted(glob.glob(os.path.join(scan_root, "*_scan")), reverse=True):
         meta = os.path.join(d, "wafer_map.json")
-        if os.path.abspath(d) == os.path.abspath(exclude) or not os.path.isfile(meta):
+        # 그 스캔보다 먼저 찍은 스캔만 (나중 스캔이 끼면 같은 스캔을 다시 합성할 때 결과가 바뀐다, 11-18)
+        if os.path.basename(d) >= os.path.basename(os.path.normpath(exclude)) or not os.path.isfile(meta):
             continue
         with open(meta) as f:
             cam = json.load(f).get("camera")
@@ -443,6 +444,25 @@ def detect_wafer(mos: np.ndarray, den: np.ndarray, s: float) -> dict | None:
             "points": int(len(inl)), "arc_deg": int(arc)}
 
 
+WAFER_RADIUS_TOL = 0.05     # 사진에서 찾은 원의 반지름이 규격(135 mm)과 이보다 다르면 웨이퍼 가장자리가 아니다
+
+
+def plausible_wafer(wafer: dict | None, s: float) -> bool:
+    """사진에서 찾은 원을 웨이퍼 외곽으로 믿을지. 짧은 호이거나 반지름이 규격과 다르면 믿지 않는다.
+    11-18 14:29: 굵은 스테인 고리(반지름 113 mm, 호 165°)를 웨이퍼로 잡아 격자 측정까지 틀어졌다."""
+    return bool(wafer) and wafer["arc_deg"] >= 45 and abs(wafer["r"] / (WAFER_DIAMETER_MM / 2 * s) - 1) <= WAFER_RADIUS_TOL
+
+
+def gantry_grid(wafer: dict | None, measured: dict | None) -> dict | None:
+    """다이 칸 간격은 갠트리 이동량(웨이퍼 원)에서 정한다. 사진은 다이마다 갠트리로 옮겨 찍으므로 칸 간격은 이동량 그대로다.
+    사진 속 격자선으로 잰 간격은 카메라 축척 추정이 틀리면 3 % 어긋났고(11-17 16:51, 11-18 14:56), 격자선이
+    사진 가장자리 제외 구역에 들어가면 아예 못 쟀다(11-18 네 장). 기울기는 잰 값이 있으면 쓰고 없으면 0 이다."""
+    if not wafer or not wafer.get("from_gantry"):
+        return measured
+    base = measured or {"angle_deg": 0.0, "phase": {}, "lines": None}
+    return {**base, "pitch_px": wafer["r"] * WAFER_MODEL["pitch_mm"] / (WAFER_DIAMETER_MM / 2), "from_gantry": True}
+
+
 def measure_grid(mos: np.ndarray, den: np.ndarray, wafer: dict | None, s: float | None = None) -> dict | None:
     """격자 기울기와 피치. 회전시키며 행·열 투영의 뾰족함이 최대인 각을 찾는다.
     테이프처럼 굵고 진한 구조가 투영을 지배하지 않도록 웨이퍼 원 안쪽만 쓴다.
@@ -618,7 +638,7 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
     log("웨이퍼·격자 측정")
     wafer = detect_wafer(mos_g, den_g, s)
     cfg_ = man.get("config") or {}
-    if (wafer is None or wafer["arc_deg"] < 45) and "wafer_center_x" in cfg_:
+    if not plausible_wafer(wafer, s) and "wafer_center_x" in cfg_:
         # 근접 촬영은 시야가 좁아 웨이퍼 가장자리가 끝 사진에 조금씩만 보인다(2026-11-14).
         # 갠트리 위치가 정확하므로 설정된 웨이퍼 중심과 지름으로 원을 정한다
         cg = (pos.max(0) + pos.min(0)) / 2
@@ -626,7 +646,7 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
         wafer = {"cx": size[1] / 2 + (wx - cg[0]) * s, "cy": size[0] / 2 - (wy - cg[1]) * s,
                  "r": WAFER_DIAMETER_MM / 2 * s, "residual_px": None, "points": 0, "arc_deg": 360, "from_gantry": True}
         log("웨이퍼 가장자리가 짧게만 보여 설정된 웨이퍼 중심과 지름으로 원을 정함")
-    grid = measure_grid(mos_g, den_g, wafer if wafer and wafer["arc_deg"] >= 45 else None)
+    grid = gantry_grid(wafer, measure_grid(mos_g, den_g, wafer if wafer and wafer["arc_deg"] >= 45 else None))
 
     # 컬러 출력 (out_scale=1 이면 원본의 절반 해상도 기준)
     S = s * out_scale
@@ -767,7 +787,8 @@ def build(scan_dir: str, out_dir: str | None = None, out_scale: float = 1.0, log
         result["grid"] = {"angle_deg": grid["angle_deg"], "pitch_px": round(grid["pitch_px"] * out_scale, 1),
                           "phase": grid["phase"], "lines": grid["lines"],
                           "pitch_gantry_mm": round(grid["pitch_px"] / s, 2),
-                          "pitch_mm": round(grid["pitch_px"] * ratio, 2) if ratio else None}
+                          "pitch_mm": round(grid["pitch_px"] * ratio, 2) if ratio else None,
+                          "from_gantry": bool(grid.get("from_gantry"))}
     if flip_y:
         result["flipped_y"] = True
         if "wafer" in result:

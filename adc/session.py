@@ -123,13 +123,10 @@ class Session:
                     model = cnn.Model(dies, q, scoring.RuleModel(dies, {k: v for k, v in self.defects.items() if k in bad}))
                 ctx = None
                 if self.source == "scan":
-                    spans = {}
-                    for f in self.detection["defects"]:
-                        if f["type"] == "scratch":
-                            spans.setdefault(f["obj"], set()).add(f["die"])
+                    # 패턴 근거 검토(adc/geometry.py)에 검출 위치를 넘긴다.
                     # shortcut: 수율 한계는 10 % 고정. 이력이 결함을 일부러 넣은 시험 웨이퍼뿐이라 평균+3σ 가 100 % 가 되어
                     # 불량 판정이 사라졌다(11-17). 생산 웨이퍼 이력이 6 장 이상 쌓이면 AEC-Q002 SYL(평균+3σ)로 바꾼다
-                    ctx = {"long_scratch": max((len(v) for v in spans.values()), default=0)}
+                    ctx = {"defects": self.detection["defects"], "inspected": self.detection["inspected"]}
                 r = engine.analyze(dies, spec, self.defects, self.answers, self.target, model, verdicts or None, ctx)
                 sess = {"source": self.source, "scenario": self.scenario, "edited": self.edited,
                         "scenario_name": scenarios.SCENARIOS[self.scenario]["name"],

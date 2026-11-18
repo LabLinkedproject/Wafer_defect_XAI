@@ -125,10 +125,13 @@ class WaferVerdict(unittest.TestCase):
         # 11-17 실물: 웨이퍼를 가로지르는 스크래치 3개를 모델이 Local 로 읽었다. 전체 이미지 분석이 3 다이 이상
         # 이어진 스크래치를 찾으면 Scratch 패턴을 근거와 함께 더한다
         defects = scenarios.generate("donut", DIES)
+        by_id = {d["id"]: d for d in DIES}
+        line = [{"die": i, "type": "scratch", "obj": 1, "x_mm": by_id[i]["x_mm"], "y_mm": by_id[i]["y_mm"], "length_mm": 300.0}
+                for i in range(1, 12)]
         plain = engine.analyze(DIES, WAFER_MODEL, defects)
-        seen = engine.analyze(DIES, WAFER_MODEL, defects, wafer_ctx={"long_scratch": 11})
+        seen = engine.analyze(DIES, WAFER_MODEL, defects, wafer_ctx={"defects": line, "inspected": list(by_id)})
         self.assertNotIn("Scratch", plain["labels"])
-        self.assertEqual(seen["labels"][0], "Scratch")
+        self.assertIn("Scratch", seen["labels"])
         self.assertIn("다이 11개", seen["image_patterns"]["Scratch"])
         self.assertEqual(seen["wafer"]["verdict"], "fail")
         self.assertIn("Scratch", seen["wafer"]["reason"])

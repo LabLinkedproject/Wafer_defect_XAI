@@ -67,5 +67,48 @@ class WaferMeasure(unittest.TestCase):
         self.assertAlmostEqual(r, 500, places=3)
 
 
+
+class GantryGridTest(unittest.TestCase):
+    """다이 칸 간격은 갠트리 이동량(웨이퍼 원)에서 정한다 (11-18 격자 측정 실패 4 장·피치 3 % 어긋남)."""
+
+    def test_pitch_from_gantry_wafer_keeps_measured_angle(self):
+        wafer = {"r": 1350.0, "from_gantry": True}
+        g = W.gantry_grid(wafer, {"angle_deg": 0.5, "pitch_px": 310.0, "phase": {"x": 0.1}, "lines": "bright"})
+        self.assertAlmostEqual(g["pitch_px"], 1350.0 * 32 / 135)
+        self.assertEqual(g["angle_deg"], 0.5)
+        self.assertTrue(g["from_gantry"])
+
+    def test_measure_failed_still_gives_grid(self):
+        g = W.gantry_grid({"r": 1350.0, "from_gantry": True}, None)
+        self.assertAlmostEqual(g["pitch_px"], 320.0)
+        self.assertEqual(g["angle_deg"], 0.0)
+
+    def test_photo_wafer_keeps_measurement(self):
+        m = {"angle_deg": 0.25, "pitch_px": 300.0, "phase": {}, "lines": "bright"}
+        self.assertIs(W.gantry_grid({"r": 1300.0}, m), m)
+        self.assertIsNone(W.gantry_grid(None, None))
+
+    def test_wafer_radius_far_from_spec_is_not_trusted(self):
+        s = 10.0                                          # 모자이크 px/mm → 반지름 1350 px 가 정상
+        self.assertTrue(W.plausible_wafer({"r": 1340.0, "arc_deg": 120}, s))
+        self.assertFalse(W.plausible_wafer({"r": 1134.0, "arc_deg": 165}, s))   # 11-18 14:29: 스테인 고리를 잡음
+        self.assertFalse(W.plausible_wafer({"r": 1350.0, "arc_deg": 30}, s))
+        self.assertFalse(W.plausible_wafer(None, s))
+
+
+class CameraPriorOrderTest(unittest.TestCase):
+    """기준 카메라 값은 그 스캔보다 먼저 찍은 스캔에서만 (나중 스캔이 끼면 다시 합성할 때 결과가 바뀐다)."""
+
+    def test_only_earlier_scans(self):
+        import json, os, tempfile
+        root = tempfile.mkdtemp()
+        for name, sc in (("20260101_000000_scan", 20.0), ("20260102_000000_scan", 21.0), ("20260103_000000_scan", 99.0)):
+            os.makedirs(os.path.join(root, name))
+            with open(os.path.join(root, name, "wafer_map.json"), "w") as f:
+                json.dump({"camera": {"px_per_mm_full": sc, "rotation_deg": -90.0, "mirrored": False}}, f)
+        A = W.camera_prior(root, os.path.join(root, "20260102_120000_scan"))
+        self.assertAlmostEqual(float(np.linalg.norm(A[:, 0])), 20.5 * W.WORK_SCALE, places=4)
+
+
 if __name__ == "__main__":
     unittest.main()
