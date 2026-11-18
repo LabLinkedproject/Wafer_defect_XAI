@@ -59,7 +59,7 @@ def clean(data: dict) -> dict:
             raise ValueError(f"개수를 적은 다이 {k} 가 결함 다이 목록에 없습니다")
         counts[str(int(k))] = {t: int(n) for t, n in per.items() if t in dies[str(int(k))] and int(n) > 0}
     out = {"stage": stage, "dies": dies, "patterns": patterns, "judged": judged,
-           "note": str(data.get("note") or "")[:500]}
+           "note": str(data.get("note") or "")[:3000]}  # 원인 분석까지 적는다 (11-18)
     if counts:
         out["counts"] = counts
     return out

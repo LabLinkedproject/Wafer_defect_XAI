@@ -159,3 +159,9 @@ class WaferVerdict(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_truth_note_keeps_cause_analysis():
+    from adc import truth
+    note = "원인 분석 " * 300  # 1,800자 — 예전 500자 제한이면 잘렸다
+    assert truth.clean({"note": note})["note"] == note
