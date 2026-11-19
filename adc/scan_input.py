@@ -38,18 +38,6 @@ def map_meta(scan_id: str, display: bool = False) -> dict:
     disp = wafer_display.ensure(d, m) if display else None           # 대시보드 표시용만: 미촬영 바깥을 채운 맵 (다이 자르기는 원본 url)
     if disp:
         m["display_url"] = f"/scans/{m['dir']}/{disp}?v={int(os.path.getmtime(os.path.join(d, disp)))}"
-    res = os.path.join(d, "result_view.json")
-    if os.path.isfile(res):
-        try:
-            with open(res) as f:
-                info = json.load(f)
-            t = map_meta(info["template"])                     # 결과 이미지는 템플릿 맵 좌표다
-            img = os.path.join(d, info["image"])
-            t["url"] = f"/scans/{m['dir']}/{info['image']}?v={int(os.path.getmtime(img))}"
-            t.pop("result", None)
-            m["result"] = t
-        except (KeyError, OSError, ValueError):
-            pass
     return m
 
 

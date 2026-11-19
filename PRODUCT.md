@@ -29,7 +29,7 @@ Fully automatic from photo to process feedback: scan → stitch → detect → c
 ## Capabilities and Constraints
 
 - Flask server with server-rendered templates and plain HTML/CSS/JS; no build step and no front-end framework.
-- Existing capabilities to keep: one-click scan with live progress, stitched wafer map (real view and "result" view = clean reference wafer with detected defects pasted in), die map and die detail, pattern scores with thresholds, XAI (die contributions, counterfactual), cause hypotheses with next checks, recommended actions and recipe parameters, engineer verdict logging, gantry jog/origin, ground-truth recording for validation.
+- Existing capabilities to keep: one-click scan with live progress, stitched wafer map (real view only; the template "result" view was removed 2026-11-19), die map and die detail, pattern scores with thresholds, XAI (die contributions, counterfactual), cause hypotheses with next checks, recommended actions and recipe parameters, engineer verdict logging, gantry jog/origin, ground-truth recording for validation.
 - Planned removals for the 2026-11 redesign (not done yet; every other existing feature is kept, the redesign raises clarity rather than cutting features): simulation/scenario input, lighting/camera-height check, settings form, scan-bounds check and measured re-alignment, the two wafer-centre buttons, the two-page layout. Spec: `docs/specs/ui-redesign.md`.
 - Board load matters: the page must not poll aggressively or render heavy effects that slow the board-hosted server.
 - Terminology: Korean UI copy; industry terms stay in English (Donut, Edge-Ring, Edge-Loc, Center, Local, Random, Scratch, Near-full, particle, scratch, stain, TP/FP/FN/TN, XAI).

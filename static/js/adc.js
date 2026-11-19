@@ -11,7 +11,6 @@
   let S = null;
   let mode = "status";
   let selected = null;
-  let inputMode = "real";    // real | result
 
   async function api(url, body) {
     const opt = body === undefined ? {} : {
@@ -111,21 +110,10 @@
     $("verdict-line").textContent = S.conclusion;
   }
 
-  // ── 웨이퍼 맵 사진 (실측 / 결과) ─────────────────────────────
+  // ── 웨이퍼 맵 사진 (실측) ────────────────────────────────────
   function renderInput() {
     const scan = S.session.source === "scan";
     const usable = !!(scan && S.wafer_map && S.wafer_map.wafer);
-    const hasResult = !!(usable && S.wafer_map.result && S.wafer_map.result.wafer);
-    if (inputMode !== "result" || !hasResult) inputMode = "real";
-    // 결과 화면은 순정 웨이퍼 템플릿 좌표의 이미지라 템플릿 맵 정보로 그린다 (검출 표시·격자도 그 좌표로)
-    const map = inputMode === "result" ? S.wafer_map.result : S.wafer_map;
-    document.querySelectorAll("#input-modes button").forEach((b) => {
-      b.classList.toggle("on", b.dataset.v === inputMode);
-      b.setAttribute("aria-pressed", b.dataset.v === inputMode);
-      b.disabled = !usable || (b.dataset.v === "result" && !hasResult);
-      if (b.dataset.v === "result") b.hidden = !hasResult;
-    });
-    $("input-title").textContent = inputMode === "result" ? "결과 (순정 템플릿 + 검출 결함)" : "웨이퍼 맵";
     $("map-empty").hidden = usable;
     $("real-view").hidden = !usable;
     if (!usable) { $("real-view").innerHTML = ""; $("input-note").textContent = ""; return; }
@@ -133,14 +121,12 @@
       x_mm: f.x_mm, y_mm: f.y_mm, r_mm: Math.max(2.5, Math.sqrt(f.area_mm2 / Math.PI) + 1.5),
       color: css(TYPE_COLOR[f.type]), title: `다이 ${f.die} · ${S.types[f.type].ko} · ${f.area_mm2} mm²`,
     })) : null;
-    WaferView.draw($("real-view"), map, { grid: $("show-grid").checked, selected: selected, marks, pitchMm: S.spec.pitch_mm });
+    WaferView.draw($("real-view"), S.wafer_map, { grid: $("show-grid").checked, selected: selected, marks, pitchMm: S.spec.pitch_mm });
     // 다이를 넘는 결함은 하나로 센다 (같은 obj)
     const objs = new Map(S.found.map((f) => [f.obj, f.type]));
     const kinds = Object.keys(S.types).map((k) => [S.types[k].ko, [...objs.values()].filter((t) => t === k).length]).filter(([, n]) => n);
     const by = kinds.map(([ko, n]) => `${ko} ${n}`).join(" · ") || "결함 없음";
-    $("input-note").textContent = inputMode === "result"
-      ? `순정 웨이퍼(${map.dir}) 위에 검출 결함 ${objs.size}개의 실제 모습을 붙인 결과 · 놓친 결함은 '실측 맵'에서 확인하세요`
-      : `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${S.wafer_map.coverage_pct}% · 기준 다이 비교로 결함 ${objs.size}개 (${by}, 다이를 넘는 것은 하나로)`;
+    $("input-note").textContent = `촬영 ${S.wafer_map.images}장 합성 맵 · 커버리지 ${S.wafer_map.coverage_pct}% · 기준 다이 비교로 결함 ${objs.size}개 (${by}, 다이를 넘는 것은 하나로)`;
   }
 
   // ── 웨이퍼 맵 ────────────────────────────────────────────────
@@ -465,12 +451,6 @@
   $("show-zones").onchange = renderMap;
   $("show-overlay").onchange = renderInput;
   $("show-grid").onchange = renderInput;
-  $("input-modes").onclick = (e) => {
-    const b = e.target.closest("button");
-    if (!b || b.disabled) return;
-    inputMode = b.dataset.v;
-    renderInput();
-  };
   $("show-xai-map").onclick = () => {
     mode = "xai";
     renderMap();
