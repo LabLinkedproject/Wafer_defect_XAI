@@ -9,6 +9,13 @@
 ./venv/bin/python app.py        # http://<보드 IP>:5000
 ```
 
+보드를 켜면 서버가 자동으로 뜬다 (`launcher/wafer-inspection.service`, 설치 방법은 파일 첫 줄).
+수동 실행 전에는 `sudo systemctl stop wafer-inspection` 으로 끈다 (카메라·포트를 같이 쓴다).
+
+노트북(윈도우)에서는 `launcher/windows/` 의 두 파일을 받아 `build.cmd` 를 한 번 실행하면
+`WaferDefectXAI.exe` 가 생긴다. 실행하면 검사 화면이 주소창 없는 전용 창으로 열린다.
+보드 주소가 `192.168.137.2` 가 아니면 같은 폴더 `server.txt` 첫 줄에 `http://<주소>:5000/` 을 적는다.
+
 | 화면 | 내용 |
 |---|---|
 | `/scan` | 카메라 미리보기, 갠트리 이동, 자동 스캔, 웨이퍼 맵 합성 |

@@ -192,8 +192,11 @@ def video_feed():
 
 if __name__ == "__main__":
     health_log.start()
-    try:
-        camera.start(exposure=scan_config.load()["exposure"])
-    except Exception as e:
-        print("[Camera Error]", e)
+    for attempt in range(5):                          # 부팅 직후 첫 열기가 가끔 실패한다 (2026-11-19, 자동 실행)
+        try:
+            camera.start(exposure=scan_config.load()["exposure"])
+            break
+        except Exception as e:
+            print("[Camera Error]", e)
+            time.sleep(2)
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True, use_reloader=False)

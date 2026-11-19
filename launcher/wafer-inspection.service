@@ -1,0 +1,18 @@
+# 보드를 켜면 검사 서버를 띄운다. 설치: sudo cp launcher/wafer-inspection.service /etc/systemd/system/ && sudo systemctl enable --now wafer-inspection
+# 서버 시작만 한다: 모터는 움직이지 않고, 스캔 전 원점 확인 절차는 그대로다.
+[Unit]
+Description=Wafer Defect XAI inspection server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=orangepi
+WorkingDirectory=/home/orangepi/wafer_inspection
+ExecStart=/home/orangepi/wafer_inspection/venv/bin/python app.py
+StandardOutput=append:/home/orangepi/wafer_inspection/logs/app.log
+StandardError=append:/home/orangepi/wafer_inspection/logs/app.log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
