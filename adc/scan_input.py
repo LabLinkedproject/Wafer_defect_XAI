@@ -29,13 +29,13 @@ def scan_dir(scan_id: str) -> str:
     return d
 
 
-def map_meta(scan_id: str) -> dict:
+def map_meta(scan_id: str, display: bool = False) -> dict:
     d = scan_dir(scan_id)
     with open(os.path.join(d, "wafer_map.json")) as f:
         m = json.load(f)
     m["dir"] = os.path.basename(d)
     m["url"] = f"/scans/{m['dir']}/{m.get('view') or m['map']}"      # 화면용 맵이 있으면 그것을 보여 준다
-    disp = wafer_display.ensure(d, m)                                # 미촬영 바깥을 채운 표시용 (다이 자르기는 원본 url)
+    disp = wafer_display.ensure(d, m) if display else None           # 대시보드 표시용만: 미촬영 바깥을 채운 맵 (다이 자르기는 원본 url)
     if disp:
         m["display_url"] = f"/scans/{m['dir']}/{disp}?v={int(os.path.getmtime(os.path.join(d, disp)))}"
     res = os.path.join(d, "result_view.json")
@@ -47,7 +47,6 @@ def map_meta(scan_id: str) -> dict:
             img = os.path.join(d, info["image"])
             t["url"] = f"/scans/{m['dir']}/{info['image']}?v={int(os.path.getmtime(img))}"
             t.pop("result", None)
-            t.pop("display_url", None)                         # 결과 화면은 결과 이미지를 그대로 보인다
             m["result"] = t
         except (KeyError, OSError, ValueError):
             pass

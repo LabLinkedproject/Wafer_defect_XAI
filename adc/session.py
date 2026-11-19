@@ -142,7 +142,7 @@ class Session:
                     r["die_verdicts"] = {int(k): {**v, "verdict": verdicts.get(int(k), v["verdict"]),
                                                   "by": "operator" if int(k) in self.overrides else "detect"}
                                          for k, v in det.get("verdicts", {}).items()}
-                    r["wafer_map"] = scan_input.map_meta(self.scan_id)
+                    r["wafer_map"] = scan_input.map_meta(self.scan_id, display=True)
                 else:
                     r["found"] = []
                     r["wafer_map"] = wafer_stitch.latest_map(SCAN_ROOT)
