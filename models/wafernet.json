@@ -1,0 +1,28 @@
+{
+  "patterns": [
+    "Center",
+    "Donut",
+    "Edge-Loc",
+    "Edge-Ring",
+    "Local",
+    "Random",
+    "Scratch",
+    "Near-full"
+  ],
+  "epoch": 17,
+  "variant": "b",
+  "size": 60,
+  "cell_mm": 5.333333333333333,
+  "cells_per_die": 6,
+  "temperature": 0.8500000000000003,
+  "thresholds": {
+    "Center": 0.96,
+    "Donut": 0.9,
+    "Edge-Loc": 0.64,
+    "Edge-Ring": 0.98,
+    "Local": 0.58,
+    "Random": 0.34,
+    "Scratch": 0.32,
+    "Near-full": 0.9
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "test_maps": 4738,
+  "conditions": {
+    "44다이 판정": {
+      "cnn_accuracy": 0.7035,
+      "svm_accuracy": 0.7383,
+      "cnn": {
+        "Center": {
+          "recall": 0.8347,
+          "n": 502
+        },
+        "Donut": {
+          "recall": 0.6,
+          "n": 40
+        },
+        "Edge-Loc": {
+          "recall": 0.4756,
+          "n": 1291
+        },
+        "Edge-Ring": {
+          "recall": 0.9765,
+          "n": 2003
+        },
+        "Local": {
+          "recall": 0.4007,
+          "n": 614
+        },
+        "Random": {
+          "recall": 0.2791,
+          "n": 86
+        },
+        "Scratch": {
+          "recall": 0.2323,
+          "n": 198
+        },
+        "Near-full": {
+          "recall": 1.0,
+          "n": 4
+        }
+      },
+      "svm": {
+        "Center": {
+          "recall": 0.8785,
+          "n": 502
+        },
+        "Donut": {
+          "recall": 0.6,
+          "n": 40
+        },
+        "Edge-Loc": {
+          "recall": 0.6824,
+          "n": 1291
+        },
+        "Edge-Ring": {
+          "recall": 0.9046,
+          "n": 2003
+        },
+        "Local": {
+          "recall": 0.4007,
+          "n": 614
+        },
+        "Random": {
+          "recall": 0.8605,
+          "n": 86
+        },
+        "Scratch": {
+          "recall": 0.101,
+          "n": 198
+        },
+        "Near-full": {
+          "recall": 0.0,
+          "n": 4
+        }
+      }
+    },
+    "44다이 2×2 구역": {
+      "cnn_accuracy": 0.7588,
+      "svm_accuracy": 0.8081,
+      "cnn": {
+        "Center": {
+          "recall": 0.9303,
+          "n": 502
+        },
+        "Donut": {
+          "recall": 0.575,
+          "n": 40
+        },
+        "Edge-Loc": {
+          "recall": 0.5515,
+          "n": 1291
+        },
+        "Edge-Ring": {
+          "recall": 0.9785,
+          "n": 2003
+        },
+        "Local": {
+          "recall": 0.4935,
+          "n": 614
+        },
+        "Random": {
+          "recall": 0.593,
+          "n": 86
+        },
+        "Scratch": {
+          "recall": 0.3788,
+          "n": 198
+        },
+        "Near-full": {
+          "recall": 1.0,
+          "n": 4
+        }
+      },
+      "svm": {
+        "Center": {
+          "recall": 0.8685,
+          "n": 502
+        },
+        "Donut": {
+          "recall": 0.725,
+          "n": 40
+        },
+        "Edge-Loc": {
+          "recall": 0.7498,
+          "n": 1291
+        },
+        "Edge-Ring": {
+          "recall": 0.9626,
+          "n": 2003
+        },
+        "Local": {
+          "recall": 0.5489,
+          "n": 614
+        },
+        "Random": {
+          "recall": 0.8256,
+          "n": 86
+        },
+        "Scratch": {
+          "recall": 0.2879,
+          "n": 198
+        },
+        "Near-full": {
+          "recall": 0.75,
+          "n": 4
+        }
+      }
+    },
+    "44다이 3×3 구역": {
+      "cnn_accuracy": 0.7885,
+      "svm_accuracy": 0.8293,
+      "cnn": {
+        "Center": {
+          "recall": 0.9283,
+          "n": 502
+        },
+        "Donut": {
+          "recall": 0.6,
+          "n": 40
+        },
+        "Edge-Loc": {
+          "recall": 0.584,
+          "n": 1291
+        },
+        "Edge-Ring": {
+          "recall": 0.9835,
+          "n": 2003
+        },
+        "Local": {
+          "recall": 0.5782,
+          "n": 614
+        },
+        "Random": {
+          "recall": 0.7558,
+          "n": 86
+        },
+        "Scratch": {
+          "recall": 0.5,
+          "n": 198
+        },
+        "Near-full": {
+          "recall": 0.75,
+          "n": 4
+        }
+      },
+      "svm": {
+        "Center": {
+          "recall": 0.9044,
+          "n": 502
+        },
+        "Donut": {
+          "recall": 0.775,
+          "n": 40
+        },
+        "Edge-Loc": {
+          "recall": 0.7545,
+          "n": 1291
+        },
+        "Edge-Ring": {
+          "recall": 0.9626,
+          "n": 2003
+        },
+        "Local": {
+          "recall": 0.6205,
+          "n": 614
+        },
+        "Random": {
+          "recall": 0.814,
+          "n": 86
+        },
+        "Scratch": {
+          "recall": 0.4495,
+          "n": 198
+        },
+        "Near-full": {
+          "recall": 0.5,
+          "n": 4
+        }
+      }
+    }
+  },
+  "scratch": {
+    "n": 198,
+    "raw_fail_cells": 140.39898681640625,
+    "core_fail_cells": 66.40403747558594,
+    "core_empty_share": 0.0
+  }
+}

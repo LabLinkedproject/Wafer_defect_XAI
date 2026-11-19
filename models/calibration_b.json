@@ -1,0 +1,13 @@
+{
+  "temperature": 0.8500000000000003,
+  "thresholds": {
+    "Center": 0.82,
+    "Donut": 0.88,
+    "Edge-Loc": 0.58,
+    "Edge-Ring": 0.88,
+    "Local": 0.56,
+    "Random": 0.46,
+    "Scratch": 0.66,
+    "Near-full": 0.9
+  }
+}

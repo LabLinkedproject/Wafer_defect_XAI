@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "templates/index.html"
+        ],
+        "createdAt": "2026-11-16T07:44:41.217Z",
+        "reason": "Claude: detector cannot resolve Jinja url_for stylesheet, so it saw no CSS sizes; app.css sets h1 1.45rem, h2 1.3rem, verdict 2.6rem"
+      }
+    ]
+  }
+}

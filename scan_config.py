@@ -1,0 +1,75 @@
+"""
+scan_config.py
+스캔 콘솔 설정 (웹에서 바꾸고 파일로 유지). 런타임 값이라 git 에는 기본값만 코드로 둔다.
+"""
+from __future__ import annotations
+import json
+import pathlib
+import threading
+
+CONFIG_FILE = pathlib.Path(__file__).with_name("scan_config.json")
+
+DEFAULTS = {
+    # 갠트리 좌표계(중앙 원점, mm)에서 웨이퍼 중심이 놓인 위치. '현재 위치를 웨이퍼 중심으로' 버튼으로 설정
+    "wafer_center_x": 0.0,
+    "wafer_center_y": 0.0,
+    # 웨이퍼 좌표(+x 오른쪽, +y 위쪽)와 갠트리 축 방향이 반대면 -1
+    "wafer_sign_x": 1,
+    "wafer_sign_y": 1,
+    "pitch_mm": None,          # None 이면 wafer_model.WAFER_MODEL 값 사용
+    # 합성 맵에서 측정한 웨이퍼 반지름(갠트리 mm). 값이 있으면 웨이퍼 전체를 덮는 격자 경로로 스캔한다
+    "map_radius_mm": None,
+    "map_step_mm": 36.0,
+    "rpm": 90.0,               # 프로토타입 기준 속도 (매핑 구현하며 점진 조정)
+    "accel_rev": 0.5,
+    "dwell_s": 0.6,            # 정지 후 흔들림이 가라앉을 때까지 대기
+    "exposure": 20,            # 화면 미리보기 노출 (사람이 보기 편한 값). None 이면 자동
+    # 촬영 노출 (검출용). 스캔하는 동안만 쓰고 끝나면 미리보기 노출로 돌린다. None 이면 미리보기 노출 그대로
+    # 회색 뒷면 + 현재 조명에서 포화 없이 가장 밝은 값이 25 였다 (35 는 밝은 부분 10 % 가 248 한계에 붙음)
+    "scan_exposure": 25,
+    # 스캔 시작 때 웨이퍼 중심에서 몇 장 찍어 촬영 노출을 맞춘다 (scan_exposure 는 시작값). 조명을 바꿔도 따라간다
+    "auto_exposure": True,
+    # 카메라 높이 기준: 촬영 환경 점검이 처음 잰 사진 속 격자 한 칸(px)과 그때의 카메라 축척(px/갠트리 mm).
+    # 높이를 바꾸면 격자 간격 비율로 새 축척(camera_scale_hint)을 계산해 맵 합성 기준으로 쓴다
+    "camera_ref_pitch_px": None,
+    "camera_ref_scale": None,
+    "camera_ref_sharpness": None,
+    "camera_scale_hint": None,
+    # 카메라를 다시 달아 방향이 바뀌었을 때 잰 회전(°, 갠트리 mm → 사진 이동). 2026-11-14 근접 장착은 −90
+    "camera_turn_hint": None,
+    # 촬영이 끝나면 맵 합성·결함 검출을 바로 이어서 돌린다. 보드 전원이 약할 때(노트북 USB, 2026-11-14)는 끄고
+    # 촬영과 합성을 나눠 돌린다 (웹 '맵 다시 합성' 또는 POST /api/scan/map)
+    "auto_map": True,
+    # 맵 합성 CPU 사용: "all"(모든 코어, 가장 빠름) / "little4"(작은 코어 4개, 큰 코어 안 씀) / "little1"(작은 코어 하나·최저 우선순위)
+    # 전원이 약하면 순간 부하로 보드가 멈춘다 — 멈추면 한 단계씩 낮춘다 (2026-11-14 노트북 USB 0.9 A 에서 little1, 11-16 5 V 3 A)
+    "map_cpu": "all",
+    # 투명 앞면 검출을 색 차이(R−B)로 한다. 기본은 흑백에서 어두운 것만 (wafer_detect.detection_channel 참고)
+    "detect_chroma": False,
+    # 검사면 고정: "front"(투명 앞면) 이면 어두운 것만 결함으로 센다. None 이면 맵의 격자선 밝기로 자동 판단
+    "surface": None,
+    # 기준 웨이퍼(결함 없는 순정 상태) 스캔 id. 정하면 같은 위치의 다이끼리 비교한다. 웨이퍼를 그대로 둔 채 찍어야 한다
+    # (11-16 시험: 두 스캔 사이 웨이퍼가 1~2 mm·1° 움직이자 잡음이 3배로 늘었다). None 이면 같은 웨이퍼 다이끼리 비교
+    "reference_scan": None,
+    "jpeg_quality": 92,
+}
+
+_lock = threading.Lock()
+
+
+def load() -> dict:
+    with _lock:
+        try:
+            data = json.loads(CONFIG_FILE.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+    return {**DEFAULTS, **{k: v for k, v in data.items() if k in DEFAULTS}}
+
+
+def update(**changes) -> dict:
+    cfg = load()
+    for k, v in changes.items():
+        if k in DEFAULTS:
+            cfg[k] = v
+    with _lock:
+        CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    return cfg

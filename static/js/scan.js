@@ -1,0 +1,285 @@
+// 스캔 구역 (한 화면 Wafer Defect XAI): 장비 상태·스캔·다이별 촬영 진행·장비 패널
+(() => {
+  const $ = (id) => document.getElementById(id);
+  let plan = null;
+  let status = null;
+  let pollTimer = null;
+
+  async function api(url, body) {
+    const opt = body === undefined ? {} : {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    };
+    const r = await fetch(url, opt);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.success === false) {
+      showBanner(data.error || `요청 실패 (${r.status})`);
+      throw new Error(data.error || r.status);
+    }
+    return data;
+  }
+
+  function showBanner(msg, info = false) {
+    const b = $("banner");
+    b.textContent = msg;
+    b.className = "banner" + (info ? " info" : "");
+    b.hidden = !msg;
+  }
+
+  function chip(el, state, text) {
+    el.className = "chip " + state;
+    el.textContent = text;
+  }
+
+  // ── 모자이크 (44다이 배치) ───────────────────────────────────
+  function buildMosaic() {
+    const m = $("mosaic");
+    const n = Math.max(...plan.order.map((d) => Math.max(d.row, d.col))) + 1;
+    m.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
+    m.innerHTML = "";
+    const byPos = new Map(plan.order.map((d) => [`${d.row},${d.col}`, d]));
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        const d = byPos.get(`${r},${c}`);
+        const cell = document.createElement("div");
+        cell.className = d ? "die" : "die off";
+        if (d) {
+          cell.id = `die-${d.id}`;
+          cell.title = `다이 ${d.id} · 행 ${r + 1}, 열 ${c + 1} · 갠트리 (${d.gx}, ${d.gy}) mm`;
+          cell.innerHTML = `<span class="id">${d.id}</span>`;
+        }
+        m.appendChild(cell);
+      }
+    }
+  }
+
+  function fillMosaic(results, currentId) {
+    document.querySelectorAll(".die.current").forEach((e) => e.classList.remove("current"));
+    for (const r of results) {
+      const cell = $(`die-${r.id}`);
+      if (!cell || cell.dataset.file === r.file) continue;
+      cell.dataset.file = r.file;
+      cell.classList.add("done");
+      cell.innerHTML = `<a href="/scans/${r.file}" target="_blank" rel="noopener">
+        <img src="/scans/${r.thumb}" alt="다이 ${r.id} 촬영 이미지" loading="lazy"></a>
+        <span class="id">${r.id}</span>`;
+    }
+    if (currentId) $(`die-${currentId}`)?.classList.add("current");
+  }
+
+  // 대기 중에는 고른 검사 기록의 다이 사진으로 격자를 채운다 (빈 격자가 첫 화면을 차지하지 않게)
+  let shownRecord = null;
+  async function showRecord(id) {
+    if (!id || id === shownRecord || !plan) return;
+    shownRecord = id;
+    try {
+      const m = await (await fetch(`/scans/${id}/manifest.json`)).json();
+      clearMosaic();
+      fillMosaic(m.dies.filter((d) => d.file), null);
+    } catch (e) { shownRecord = null; }
+  }
+
+  function clearMosaic() {
+    document.querySelectorAll(".die.done").forEach((cell) => {
+      cell.classList.remove("done");
+      delete cell.dataset.file;
+      cell.innerHTML = `<span class="id">${cell.id.replace("die-", "")}</span>`;
+    });
+  }
+
+  // ── 미니맵 (갠트리 범위 · 웨이퍼 · 현재 위치) ────────────────
+  function drawMinimap() {
+    if (!status || !plan) return;
+    const svg = $("minimap");
+    const [xl, xh] = status.limits.x, [yl, yh] = status.limits.y;
+    const W = 220, H = 190, pad = 10;
+    const s = Math.min((W - 2 * pad) / (xh - xl), (H - 2 * pad) / (yh - yl));
+    const X = (x) => pad + (x - xl) * s;
+    const Y = (y) => H - pad - (y - yl) * s;      // 위쪽이 +y
+    const cfg = status.config;
+    const cx = cfg.wafer_center_x, cy = cfg.wafer_center_y;
+    const R = plan.spec.diameter_mm / 2;
+    const b = plan.bounds_mm;
+    const p = status.position;
+    let html = `<rect x="${X(xl)}" y="${Y(yh)}" width="${(xh - xl) * s}" height="${(yh - yl) * s}"
+                 fill="none" stroke="#c9d1da" stroke-dasharray="3 3"/>
+      <circle cx="${X(cx)}" cy="${Y(cy)}" r="${R * s}" fill="#eef4fc" stroke="#9db8dc"/>
+      <rect x="${X(cx - b)}" y="${Y(cy + b)}" width="${2 * b * s}" height="${2 * b * s}"
+            fill="none" stroke="#2c3e50" stroke-width="1.5"/>`;
+    for (const d of plan.order) {
+      html += `<circle cx="${X(d.gx)}" cy="${Y(d.gy)}" r="1.4" fill="${d.in_limits ? "#7f8c8d" : "#e74c3c"}"/>`;
+    }
+    html += `<line x1="${X(0)}" y1="${Y(yl)}" x2="${X(0)}" y2="${Y(yh)}" stroke="#e1e5ea"/>
+             <line x1="${X(xl)}" y1="${Y(0)}" x2="${X(xh)}" y2="${Y(0)}" stroke="#e1e5ea"/>`;
+    if (p) {
+      html += `<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="4.5" fill="#f39c12" stroke="#fff" stroke-width="1.5">
+                 <title>카메라 (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) mm</title></circle>`;
+    }
+    svg.innerHTML = html;
+  }
+
+  // ── 상태 반영 ────────────────────────────────────────────────
+  function render() {
+    const s = status;
+    chip($("chipGpio"), s.gpio_access ? "ok" : "bad", s.gpio_access ? "GPIO 권한" : "GPIO 권한 없음");
+    chip($("chipOrigin"), s.origin_confirmed ? "ok" : "bad", s.origin_confirmed ? "원점 확인됨" : "원점 확인 필요");
+    const cal = s.calibrated && s.calibrated.x && s.calibrated.y;
+    chip($("chipCal"), cal ? "ok" : "warn", cal ? "거리 보정됨" : "거리 미보정");
+    $("chipDry").hidden = !s.dry_run;
+
+    if (!s.gpio_access) {
+      showBanner("모터를 움직이려면 GPIO 권한이 필요합니다. 터미널에서 한 번만 실행하세요: " +
+                 "sudo /home/orangepi/motor_test/install_gpio_access.sh  (그 뒤 이 서버를 재시작)");
+    } else if (!s.origin_set) {
+      showBanner("원점이 없습니다. 갠트리를 손으로 중앙에 두고 터미널에서 'gantry.sh set-center --micro 8' 을 실행하세요.");
+    } else if (!s.origin_confirmed && !s.job.busy) {
+      showBanner("원점을 확인하세요: 갠트리를 웨이퍼 정중앙(22·23·29·30번 다이가 만나는 점)에 두고 장비 패널의 '여기를 원점으로'를 누르세요. 서버를 켠 뒤·정지·초기화 뒤에는 매번 필요합니다.");
+    } else if (s.job.error) {
+      showBanner(s.job.error);
+    } else if (!plan?.all_in_limits) {
+      showBanner("일부 다이 위치가 갠트리 범위 밖입니다. 장비 패널에서 원점(웨이퍼 정중앙)을 다시 지정하세요.");
+    } else {
+      showBanner("");
+    }
+
+    const p = s.position;
+    $("posLine").textContent = p ? `X ${p.x.toFixed(2)}  Y ${p.y.toFixed(2)} mm` : "X —  Y —";
+
+    const j = s.job;
+    const busy = j.busy;
+    const pct = j.total ? Math.round((100 * j.progress) / j.total) : (busy ? 0 : 0);
+    $("bar").style.width = `${pct}%`;
+    $("jobMsg").textContent = j.message || "";
+    $("jobCount").textContent = j.total ? `${j.progress}/${j.total}` : "";
+    // 스캔·맵 합성은 단계와 남은 시간으로 보여 준다
+    const flow = j.phases?.length ? ScanProgress.html(j, { resultHref: j.result ? "#s-input" : null }) : "";
+    $("jobPlain").hidden = !!flow;
+    if ($("flow").dataset.html !== flow) { $("flow").innerHTML = flow; $("flow").dataset.html = flow; }
+
+    const ready = s.gpio_access && s.origin_set && !busy;
+    for (const id of ["btnScan", "btnOrigin", "btnSetOrigin"]) {
+      $(id).disabled = !ready;
+    }
+    $("btnScan").disabled = !ready || !plan?.all_in_limits || !s.origin_confirmed;
+    document.querySelectorAll(".jog").forEach((b) => (b.disabled = !ready));
+    $("btnStop").disabled = !busy;
+    $("btnReset").disabled = !(s.gpio_access && s.origin_set);       // 작업 중에도 누를 수 있다 (멈추고 복귀)
+
+    // 결과
+    let currentId = null;
+    if (busy && j.name === "scan") {
+      const m = /다이 (\d+)/.exec(j.message || "");
+      if (m) currentId = Number(m[1]);
+    }
+    if (busy) fillMosaic(s.scan.results, currentId);
+    else showRecord($("scenario").value);
+    renderMap(s);
+    drawMinimap();
+  }
+
+  // ── 합성 맵 정보 (맵 그림은 결과 구역이 보여 준다) ─────────
+  let mapKey = null;
+  function renderMap(s) {
+    const m = s.wafer_map;
+    $("btnMap").disabled = s.job.busy;
+    if (!m) return;
+    const key = `${m.dir}|${m.seconds}`;
+    if (key === mapKey) return;
+    mapKey = key;
+    $("mapMeta").textContent = `${m.dir} · ${m.images}장 합성 · ${m.seconds}초`;
+    const w = m.wafer, g = m.grid, c = m.camera;
+    const rows = [["카메라 축척", `${c.px_per_mm_full} px/mm`], ["카메라 회전", `${c.rotation_deg}°`], ["시야", `${c.fov_mm[0]} × ${c.fov_mm[1]} mm`],
+                  ["겹침 일치도", `${m.overlap_ncc.before} → ${m.overlap_ncc.after}`]];
+    if (w) {
+      rows.push(["웨이퍼 커버리지", `${m.coverage_pct}%`], ["웨이퍼 중심", `${w.center_gantry_mm[0]}, ${w.center_gantry_mm[1]} mm`],
+                ["웨이퍼 반지름", `${w.radius_gantry_mm} mm`]);
+    }
+    if (g) rows.push(["격자 피치", `${g.pitch_mm ?? "-"} mm`], ["격자 기울기", `${g.angle_deg}°`]);
+    $("mapFacts").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    $("mapHint").textContent = w ? "" : "웨이퍼 원을 찾지 못했습니다. 원점(웨이퍼 정중앙)을 다시 지정한 뒤 스캔하세요.";
+  }
+
+  function renderConfig() {
+    const cfg = status.config;
+    const auto = cfg.exposure === null;
+    $("expoAuto").checked = auto;
+    $("expo").disabled = auto;
+    if (!auto) { $("expo").value = cfg.exposure; $("expoVal").textContent = cfg.exposure; }
+  }
+
+  function renderPlan() {
+    const sp = plan.spec;
+    $("specLine").textContent =
+      `${sp.diameter_mm} mm · 다이 ${sp.die_count}개 · 피치 ${sp.pitch_mm} mm · 스캔 ${plan.order.length}지점`;
+    // 예상 시간: 이동(대략) + 대기
+    const dwell = status ? status.config.dwell_s : 0.6;
+    const est = Math.round(plan.order.length * (dwell + 0.9) + 60);   // 이동 + 대기 + 맵 합성
+    $("eta").textContent = `${plan.order.length}지점 · 예상 약 ${Math.floor(est / 60)}분 ${est % 60}초`;
+  }
+
+  async function refreshPlan() {
+    plan = await api("/api/scan/plan");
+    renderPlan();
+    buildMosaic();
+  }
+
+  async function poll() {
+    try {
+      status = await api("/api/scan/status");
+      render();
+    } catch (e) { /* 배너로 표시됨 */ }
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, status?.job.busy ? 400 : 1500);
+  }
+
+  async function act(url, body, confirmMsg) {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    try {
+      await api(url, body ?? {});
+      setTimeout(poll, 150);
+    } catch (e) { /* 배너 */ }
+  }
+
+  // ── 이벤트 ───────────────────────────────────────────────────
+  $("btnScan").onclick = () => {
+    shownRecord = null;
+    clearMosaic();
+    const p = status && status.position;
+    const where = p ? `기록상 갠트리 위치 (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) mm 에서 출발합니다. ` +
+      "손으로 옮겼다면 취소하고 '여기를 원점으로'를 먼저 누르세요.\n\n" : "";
+    act("/api/scan/start", {}, `${where}${plan.order.length}지점 스캔을 시작합니다. 갠트리 주변에 손이나 물건이 없는지 확인하세요.`);
+  };
+  $("btnStop").onclick = () => act("/api/gantry/stop", {});
+  $("btnReset").onclick = () => {
+    const p = status && status.position;
+    const from = p ? `현재 (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) mm 에서 ` : "";
+    act("/api/gantry/reset", {}, `${from}원점 (0, 0) 으로 이동합니다. 진행 중인 작업은 멈춥니다.\n` +
+      "갠트리 주변에 손이나 물건이 없는지 확인하세요.");
+  };
+  $("btnMap").onclick = () => act("/api/scan/map", {});
+  $("btnOrigin").onclick = () => act("/api/gantry/origin", {});
+  $("btnSetOrigin").onclick = () => act("/api/gantry/set-origin", {},
+    "지금 갠트리 위치를 원점(웨이퍼 정중앙)으로 지정합니다. 모터는 움직이지 않습니다.\n" +
+    "카메라 가운데에 웨이퍼 정중앙 교차점(22·23·29·30번 다이가 만나는 점)이 있나요?");
+  document.querySelectorAll(".jog").forEach((b) => {
+    b.onclick = () => act("/api/gantry/jog", { axis: b.dataset.axis, mm: Number(b.dataset.dir) * Number($("stepSel").value) });
+  });
+  let expoTimer = null;
+  $("expo").oninput = () => {
+    $("expoVal").textContent = $("expo").value;
+    clearTimeout(expoTimer);
+    expoTimer = setTimeout(() => api("/api/scan/config", { exposure: Number($("expo").value) }).catch(() => {}), 250);
+  };
+  $("expoAuto").onchange = () => {
+    $("expo").disabled = $("expoAuto").checked;
+    api("/api/scan/config", { exposure: $("expoAuto").checked ? "auto" : Number($("expo").value) }).catch(() => {});
+  };
+
+  // ── 시작 ─────────────────────────────────────────────────────
+  (async () => {
+    status = await api("/api/scan/status");
+    await refreshPlan();
+    renderConfig();
+    render();
+    poll();
+  })();
+})();

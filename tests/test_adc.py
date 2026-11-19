@@ -1,0 +1,179 @@
+"""ADC 엔진 회귀 테스트. 실행: ./venv/bin/python -m unittest tests.test_adc -v
+
+합성 시나리오로 동작을 고정하는 테스트이며, 실제 웨이퍼 분류 정확도를 뜻하지 않는다.
+"""
+import unittest
+
+from adc import belief, engine, scenarios, scoring
+from wafer_model import WAFER_MODEL, die_layout
+
+DIES = scoring.annotate(die_layout())
+EXPECT = {
+    "normal": [], "center": ["Center"], "donut": ["Donut"], "edge_ring": ["Edge-Ring"],
+    "edge_loc": ["Edge-Loc"], "local": ["Local"], "random": ["Random"], "scratch": ["Scratch"],
+    "near_full": ["Near-full"], "donut_scratch": ["Donut", "Scratch"], "ring_random": ["Edge-Ring", "Random"],
+}
+
+
+def run(name, answers=None):
+    return engine.analyze(DIES, WAFER_MODEL, scenarios.generate(name, DIES), answers)
+
+
+class Classification(unittest.TestCase):
+    def test_all_scenarios(self):
+        for name, labels in EXPECT.items():
+            with self.subTest(name):
+                self.assertEqual(run(name)["labels"], labels)
+
+    def test_zone_sizes(self):
+        self.assertEqual([sum(d["zone"] == z for d in DIES) for z in scoring.ZONES], [4, 20, 20])
+
+
+class Explanation(unittest.TestCase):
+    def test_additive_contributions_sum_to_logit(self):
+        x = run("donut")["xai"]
+        total = x["bias"] + sum(c["impact"] for c in x["contributions"])
+        self.assertAlmostEqual(total, x["logit"], places=2)
+
+    def test_counterfactual_flips_decision(self):
+        defects = scenarios.generate("donut", DIES)
+        cf = run("donut")["xai"]["counterfactual"]
+        self.assertTrue(cf["found"])
+        rest = {k: v for k, v in defects.items() if k not in cf["dies"]}
+        self.assertLess(scoring.predict(DIES, rest)["Donut"]["score"], 0.5)
+
+
+class ActiveInference(unittest.TestCase):
+    def test_answers_change_top_cause(self):
+        before = run("donut")["belief"]["hypotheses"][0]["id"]
+        after = run("donut", [{"check": "mfc_log", "answer": "no"}, {"check": "rf_log", "answer": "yes"}])
+        self.assertEqual(before, "gas_flow")
+        self.assertEqual(after["belief"]["hypotheses"][0]["id"], "plasma")
+        self.assertTrue(after["belief"]["converged"])
+
+    def test_probabilities_sum_to_one(self):
+        d = {"Donut": 0.9}
+        self.assertAlmostEqual(sum(belief.prior_from_evidence(d, {"stain": 1.0}).values()), 1.0)
+
+    def test_unknown_answer_changes_nothing(self):
+        a = run("donut")["belief"]["hypotheses"]
+        b = run("donut", [{"check": "mfc_log", "answer": "unknown"}])["belief"]["hypotheses"]
+        self.assertEqual([h["p"] for h in a], [h["p"] for h in b])
+
+    def test_normal_wafer_has_no_hypothesis(self):
+        self.assertEqual(run("normal")["belief"]["hypotheses"], [])
+
+
+class ScanPath(unittest.TestCase):
+    """실측 스캔 경로: 검출 구역 판정 → 학습 모델 판정 → 가림·반사실 → 원인 추론.
+    입력은 시연용 인쇄 배치(다이 4등분 구역 중앙에 5 mm 파티클)와 같은 구역 판정이다."""
+
+    @staticmethod
+    def quadrats(inside):
+        out = {}
+        for d in DIES:
+            for qr in (0, 1):
+                for qc in (0, 1):
+                    x, y = d["x_mm"] + (qc - 0.5) * 16, d["y_mm"] - (qr - 0.5) * 16
+                    if inside(x, y):
+                        out[(d["id"], qr, qc)] = 1.0
+        return out
+
+    def analyze(self, q):
+        from adc import cnn
+        if not cnn.available():
+            self.skipTest("학습 모델 파일 없음")
+        defects = {}
+        for (i, _, _) in q:
+            defects.setdefault(i, {"particle": 0, "scratch": 0, "stain": 0})["particle"] += 1
+        model = cnn.Model(DIES, q, scoring.RuleModel(DIES, defects))
+        return engine.analyze(DIES, WAFER_MODEL, defects, None, None, model)
+
+    def test_center_layout(self):
+        r = self.analyze(self.quadrats(lambda x, y: (x * x + y * y) ** 0.5 < 30))
+        self.assertEqual(r["labels"], ["Center"])
+        self.assertEqual(r["model"]["kind"], "cnn")
+        self.assertTrue(r["xai"]["counterfactual"]["found"])
+        self.assertTrue(r["belief"]["hypotheses"])
+        self.assertIsNotNone(r["xai"]["rule"])
+
+    def test_donut_layout(self):
+        r = self.analyze(self.quadrats(lambda x, y: 45 < (x * x + y * y) ** 0.5 < 75))
+        self.assertEqual(r["labels"], ["Donut"])
+        self.assertTrue(r["belief"]["checks"])
+
+
+class WaferVerdict(unittest.TestCase):
+    # docs/specs/die-verdict.md: 패턴 또는 불량 다이 10 % → 불량, 재검사 다이·의심 → 재검사, 그 밖 양품
+    def stats(self, defect=0, recheck=0):
+        return {"active": 40, "normal": 40 - defect - recheck, "defect": defect, "recheck": recheck}
+
+    def test_rules(self):
+        self.assertEqual(engine._wafer(["Donut"], self.stats(1), None)["verdict"], "fail")
+        self.assertEqual(engine._wafer([], self.stats(4), None)["verdict"], "fail")          # 10 %
+        self.assertEqual(engine._wafer([], self.stats(3, 2), None)["verdict"], "recheck")
+        self.assertEqual(engine._wafer([], self.stats(3), {"name": "Scratch", "score": 0.6})["verdict"], "recheck")
+        self.assertEqual(engine._wafer([], self.stats(3), None)["verdict"], "pass")
+
+    def test_wide_stain_self_check(self):
+        # 11-18 15:36: 전면 스테인이 기준 다이까지 덮어 결함 0 개 → 양품. 다이 밝기가 크게 흔들리면 재검사로 올린다
+        wide = {"cv": 0.56, "wide_stain": True, "dark_dies": [3, 4, 5]}
+        w = engine._wafer([], self.stats(0), None, uniformity=wide)
+        self.assertEqual(w["verdict"], "recheck")
+        self.assertIn("넓은 오염", w["reason"])
+        self.assertEqual(engine._wafer([], self.stats(0), None, uniformity={"cv": 0.1, "wide_stain": False})["verdict"], "pass")
+        self.assertEqual(engine._wafer(["Donut"], self.stats(2), None, uniformity=wide)["verdict"], "fail")   # 불량이 우선
+
+    def test_inspection_criteria(self):
+        # docs/specs/inspection-criteria.md 4절
+        self.assertEqual(engine._wafer(["Random"], self.stats(3), None)["verdict"], "pass")   # Random 은 수율로만
+        self.assertEqual(engine._wafer(["Random"], self.stats(5), None)["verdict"], "fail")
+        self.assertEqual(engine._wafer([], self.stats(5), None, limit=0.2)["verdict"], "pass")
+
+    def test_scratch_pattern_from_image(self):
+        # 11-17 실물: 웨이퍼를 가로지르는 스크래치 3개를 모델이 Local 로 읽었다. 전체 이미지 분석이 3 다이 이상
+        # 이어진 스크래치를 찾으면 Scratch 패턴을 근거와 함께 더한다
+        defects = scenarios.generate("donut", DIES)
+        by_id = {d["id"]: d for d in DIES}
+        line = [{"die": i, "type": "scratch", "obj": 1, "x_mm": by_id[i]["x_mm"], "y_mm": by_id[i]["y_mm"], "length_mm": 300.0}
+                for i in range(1, 12)]
+        plain = engine.analyze(DIES, WAFER_MODEL, defects)
+        seen = engine.analyze(DIES, WAFER_MODEL, defects, wafer_ctx={"defects": line, "inspected": list(by_id)})
+        self.assertNotIn("Scratch", plain["labels"])
+        self.assertIn("Scratch", seen["labels"])
+        self.assertIn("다이 11개", seen["image_patterns"]["Scratch"])
+        self.assertEqual(seen["wafer"]["verdict"], "fail")
+        self.assertIn("Scratch", seen["wafer"]["reason"])
+        self.assertTrue(next(p for p in seen["patterns"] if p["name"] == "Scratch")["is_label"])
+
+    def test_truth_without_dies_skips_die_evaluation(self):
+        # 11-17: 패턴만 적은 정답(다이 목록 없음)을 '결함 다이 0 개'로 보고 오검출 19·24 로 기록했다
+        import tempfile, os, json
+        from adc import truth, scan_input
+        d = tempfile.mkdtemp()
+        sid = "x_scan"
+        os.makedirs(os.path.join(d, sid))
+        old = scan_input.scan_dir, scan_input.detect
+        scan_input.scan_dir = lambda s: os.path.join(d, s)
+        scan_input.detect = lambda s: {"inspected": [1, 2, 3], "defects": [{"die": 2, "type": "stain"}], "channel": "g"}
+        try:
+            truth.save(sid, {"stage": 2, "dies": {}, "patterns": ["Donut"], "judged": ["Donut"]})
+            ev = truth.record(sid)
+            self.assertIsNone(ev["fp"])
+            self.assertTrue(ev["pattern_ok"])
+            with open(os.path.join(d, truth.EVAL_LOG)) as f:
+                self.assertIsNone(json.loads(f.readline())["fp"])
+            truth.save(sid, {"stage": 1, "dies": {}, "patterns": []})          # 깨끗한 웨이퍼 정답은 그대로 비교
+            self.assertEqual(truth.record(sid)["fp"], 1)
+        finally:
+            scan_input.scan_dir, scan_input.detect = old
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+def test_truth_note_keeps_cause_analysis():
+    from adc import truth
+    note = "원인 분석 " * 300  # 1,800자 — 예전 500자 제한이면 잘렸다
+    assert truth.clean({"note": note})["note"] == note
