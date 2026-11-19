@@ -45,14 +45,18 @@ const WaferView = (() => {
       }
     }
     const id = `wv${Math.random().toString(36).slice(2, 8)}`;
+    // 표시용 맵(미촬영 바깥을 채운 것)이 있으면 그것을 흰 바탕에 그대로 보인다
+    const url = m.display_url || m.url;
+    const bg = m.display_url ? "#ffffff" : "#101114";
+    const outer = m.display_url ? 1 : opts.outer === false ? 0 : 0.35;
     host.classList.add("wafer-view");
     host.innerHTML = `<svg viewBox="${vb}" role="img" aria-label="합성 웨이퍼 맵">
       <defs><clipPath id="${id}"><circle cx="${geo.cx}" cy="${geo.cy}" r="${geo.r}"/></clipPath></defs>
-      <rect x="${geo.cx - margin}" y="${geo.cy - margin}" width="${margin * 2}" height="${margin * 2}" fill="#101114"/>
-      <image href="${m.url}" x="0" y="0" width="${W}" height="${H}" opacity="${opts.outer === false ? 0 : 0.35}"/>
-      <image href="${m.url}" x="0" y="0" width="${W}" height="${H}" clip-path="url(#${id})"/>
+      <rect x="${geo.cx - margin}" y="${geo.cy - margin}" width="${margin * 2}" height="${margin * 2}" fill="${bg}"/>
+      <image href="${url}" x="0" y="0" width="${W}" height="${H}" opacity="${outer}"/>
+      <image href="${url}" x="0" y="0" width="${W}" height="${H}" clip-path="url(#${id})"/>
       <g clip-path="url(#${id})" stroke="#4da3ff" stroke-opacity=".5" stroke-width="${sw}" fill="none">${lines}</g>
-      <circle cx="${geo.cx}" cy="${geo.cy}" r="${geo.r}" fill="none" stroke="#fff" stroke-width="${sw * 1.6}"/>
+      <circle cx="${geo.cx}" cy="${geo.cy}" r="${geo.r}" fill="none" stroke="${m.display_url ? "#969696" : "#fff"}" stroke-width="${sw * 1.6}"/>
       <g>${marks}</g>
     </svg>`;
   }
